@@ -1,0 +1,208 @@
+# =============================================================================
+# BTC SMC Trader — configuratie
+# Alle tuneable parameters staan hier. Niets hardcoded in de broncode.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Data
+# -----------------------------------------------------------------------------
+data:
+  symbol: "BTCUSDT"
+  base_interval: "1m"           # Enkel interval dat via API wordt opgehaald
+  start_date: "2019-01-01"
+  end_date: null                 # null = tot vandaag
+
+  # Hogere timeframes worden lokaal berekend via upsampling
+  timeframes:
+    signal: "15min"              # pandas resample string
+    regime: "4h"
+
+  paths:
+    raw:       "data/raw/binance/{symbol}"
+    processed: "data/processed"
+    smc_cache: "data/smc_cache/{symbol}/15m"
+
+  # Binance API (rate limiting)
+  binance:
+    requests_per_minute: 1200    # Veilig budget (max 6000 weight/min, 2 per request)
+    retry_wait_seconds: 10       # Extra buffer bovenop Retry-After header
+
+# -----------------------------------------------------------------------------
+# In-sample / Out-of-sample splitsing
+# -----------------------------------------------------------------------------
+split:
+  in_sample_start:  "2019-01-01"
+  in_sample_end:    "2022-12-31"
+  #in_sample_start: "2021-01-01"
+  #in_sample_end: "2025-12-31"
+  oos_start:        "2023-01-01"
+  oos_end:          "2024-12-31"
+  #oos_start:        "2025-01-01"
+  #oos_end:          "2025-12-31"
+
+# -----------------------------------------------------------------------------
+# SMC signalen (15m)
+# -----------------------------------------------------------------------------
+smc:
+  swing_length: 20               # Lookback voor swing highs/lows
+
+  # Cache metadata
+  lib_version: "0.0.27"          # Bij versiewijziging: gehele cache herbouwen
+
+# -----------------------------------------------------------------------------
+# Lifecycle state machine
+# Alle TTL-waarden in aantal 15m candles
+# -----------------------------------------------------------------------------
+lifecycle:
+  ttl:
+    ob_formed: 200       # ~5 dagen
+    sweep_occurred: 20  # ~5 dagen
+    choch_confirmed: 15 # ~5 dagen
+    entry_valid: 5     # ~5 dagen
+
+  # Invalidatiecondities (true = actief)
+  invalidation:
+    ob_mitigated:        true
+    opposite_bos:       false
+    regime_change:      true
+
+# -----------------------------------------------------------------------------
+# Regime detector (4h HMM)
+# -----------------------------------------------------------------------------
+regime:
+  n_states: 2                    # 2 = bullish / bearish
+  features:
+    - "log_return"
+    - "atr_ratio"                # huidige ATR / N-periode gemiddelde
+  atr_period: 14                 # ATR berekening
+  atr_ma_period: 50              # Gemiddelde voor ATR ratio
+  n_iter: 100                    # HMM trainingsiteraties
+  random_state: 42
+
+# -----------------------------------------------------------------------------
+# Risico & positiebeheer
+# -----------------------------------------------------------------------------
+risk:
+  capital_initial: 10000         # Startkapitaal in USDT
+  risk_per_trade_pct: 1.0        # % van kapitaal per trade
+  reward_ratio: 1.5              # Risk:reward (TP = SL * reward_ratio)
+  sl_buffer_pct: 0.5             # % onder OB-bottom (long) / boven OB-top (short)
+  max_open_trades: 1             # Maximum gelijktijdig open posities
+
+  # Entry: limit order op midden van OB-zone
+  entry: "ob_midpoint"
+
+  circuit_breaker:
+    max_consecutive_losses: 3
+    max_daily_loss_pct: 3.0      # % van startkapitaal
+    max_drawdown_pct: 10.0       # harde noodstop (herstart vereist)
+
+  trailing_stop:
+    enabled: true
+    breakeven_at_r: 1.0          # Verplaats SL naar entry na 1× risico winst
+    trail_after_r: 2.0           # Start trailing na 2× risico (null = uitgeschakeld)
+    trail_step_r: 0.5            # Trail SL in stappen van 0.5× sl-afstand
+
+  partial_exit:
+    enabled: false               # Sluit exit_fraction van positie op exit_r winst
+    exit_r: 1.0                  # Trigger bij N× sl-afstand winst (1.0 = 1R)
+    exit_fraction: 0.5           # Deel van positie om te sluiten (0.5 = 50%)
+    move_sl_to_be: true          # Verschuif SL naar entry na partial exit
+
+# -----------------------------------------------------------------------------
+# Sweep filters (standaard configuratie)
+# -----------------------------------------------------------------------------
+filters:
+  direction: "long"        # "long" | "short" | "both"
+  regime: false            # HMM regime filter
+  bos_confirm: false       # Wacht op BOS bevestiging
+  bos_window: 10           # Aantal candles om BOS te zoeken
+  atr_filter: false        # Alleen traden bij hoge volatiliteit (ATR > ATR_MA)
+  atr_window: 14           # Rolling window voor ATR gemiddelde
+
+# -----------------------------------------------------------------------------
+# Backtest engine
+# -----------------------------------------------------------------------------
+backtest:
+  fee_pct: 0.1      # 0.1% (MOET 0.1 zijn, niet 1.0!)
+  slippage_pct: 0.05 # 0.05% (MOET 0.05 zijn, niet 5.0!)
+
+  walk_forward:
+    train_months: 12              # Trainingsvenster in maanden
+    test_months: 3                # Testvenster in maanden
+    start: null                   # null = split.in_sample_start
+    end: null                     # null = split.in_sample_end
+
+  # Minimale metrics voor interpretatie
+  metrics:
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "win_rate"
+    - "trade_count"
+    - "profit_factor"
+
+# -----------------------------------------------------------------------------
+# OKX live trading
+# Credentials via environment variables (nooit in config committen)
+# -----------------------------------------------------------------------------
+okx:
+  api_key:     ""           # of via env: OKX_API_KEY
+  api_secret:  ""           # OKX_API_SECRET
+  passphrase:  ""           # OKX_PASSPHRASE
+  testnet:     true         # false = live handel
+  base_url:    "https://eea.okx.com"
+
+derivatives:
+  symbol:        "BTC-USDT-SWAP"   # perpetual swap
+  leverage:      5                 # 1–125x
+  margin_mode:   "isolated"        # "isolated" of "cross"
+  position_mode: "net_mode"        # "net_mode" = one-way (long of short, niet beide)
+  pending_order_ttl_candles: 5     # annuleer limit order na N candles zonder fill
+
+  funding_rate_filter:
+    enabled: false                 # Schakel in voor live trading op OKX
+    max_long_rate: 0.0003          # Skip longs als funding > 0.03% per 8h
+    min_short_rate: -0.0003        # Skip shorts als funding < -0.03% per 8h
+    cache_seconds: 300             # Ververs funding rate elke 5 minuten
+
+# -----------------------------------------------------------------------------
+# Notificaties
+# -----------------------------------------------------------------------------
+notifications:
+  telegram:
+    enabled:         true
+    bot_token:       ""    # of via env: TELEGRAM_BOT_TOKEN
+    chat_id:         ""    # TELEGRAM_CHAT_ID
+    heartbeat_hours: 4     # Stuur elke N uur een statusbericht (null = uitgeschakeld)
+
+# -----------------------------------------------------------------------------
+# Multi-coin configuratie
+# Large-cap coins mogen meer risico lopen dan mid-cap coins.
+# -----------------------------------------------------------------------------
+coins:
+  - symbol: "BTCUSDT"
+    swap_symbol: "BTC-USDT-SWAP"
+    tier: "large_cap"
+    leverage: 5
+#  - symbol: "ETHUSDT"
+#    swap_symbol: "ETH-USDT-SWAP"
+#    tier: "large_cap"
+#    leverage: 5
+#  - symbol: "SOLUSDT"
+#    swap_symbol: "SOL-USDT-SWAP"
+#    tier: "mid_cap"
+#    leverage: 3
+
+risk_tiers:
+  large_cap:
+    risk_per_trade_pct: 1.0
+    circuit_breaker:
+      max_consecutive_losses: 3
+      max_daily_loss_pct: 3.0
+      max_drawdown_pct: 12.0
+  mid_cap:
+    risk_per_trade_pct: 0.5
+    circuit_breaker:
+      max_consecutive_losses: 2
+      max_daily_loss_pct: 2.0
+      max_drawdown_pct: 8.0

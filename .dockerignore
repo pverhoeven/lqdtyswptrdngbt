@@ -1,0 +1,16 @@
+.git
+.gitignore
+.DS_Store
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+data/
+logs/
+.idea/
+docs/
+filter_comparison_quarterly.*
+README.md
+CLAUDE.md

@@ -1,0 +1,36 @@
+# Data ophalen
+python-binance==1.0.19
+ccxt==4.3.60
+
+# Data verwerking
+pandas==2.2.2
+numpy==1.26.4
+pyarrow==16.0.0   # parquet lezen/schrijven
+
+# SMC signalen
+smartmoneyconcepts==0.0.27
+
+# Regime detector
+hmmlearn==0.3.2
+scikit-learn==1.4.2
+
+# Backtest
+# (pandas-based, geen extra library)
+
+# Config
+PyYAML==6.0.1
+python-dotenv>=1.0.0  # laadt .env automatisch
+
+# Utilities
+tqdm==4.66.4       # progress bars bij download en cache build
+rich>=13.0.0       # live terminal dashboard
+streamlit>=1.35.0  # web dashboard
+
+# OKX live trading
+python-okx>=0.4.0
+
+# WebSocket (OKX feed)
+websocket-client>=1.6.0
+
+# Oracle Cloud secrets (alleen nodig op OCI instance, schaadt niet lokaal)
+oci>=2.120.0
