@@ -184,14 +184,14 @@ coins:
     swap_symbol: "BTC-USDT-SWAP"
     tier: "large_cap"
     leverage: 5
-#  - symbol: "ETHUSDT"
-#    swap_symbol: "ETH-USDT-SWAP"
-#    tier: "large_cap"
-#    leverage: 5
-#  - symbol: "SOLUSDT"
-#    swap_symbol: "SOL-USDT-SWAP"
-#    tier: "mid_cap"
-#    leverage: 3
+  - symbol: "ETHUSDT"
+    swap_symbol: "ETH-USDT-SWAP"
+    tier: "large_cap"
+    leverage: 5
+  - symbol: "SOLUSDT"
+    swap_symbol: "SOL-USDT-SWAP"
+    tier: "mid_cap"
+    leverage: 3
 
 risk_tiers:
   large_cap:

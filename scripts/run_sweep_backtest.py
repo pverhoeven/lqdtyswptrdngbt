@@ -73,6 +73,9 @@ _FILTER_PRESETS: dict[str, SweepFilters] = {
     "regime_bos10":  SweepFilters(regime=True, bos_confirm=True, bos_window=10),
     "long_bos10":    SweepFilters(direction="long",  bos_confirm=True, bos_window=10),
     "short_bos10":   SweepFilters(direction="short", bos_confirm=True, bos_window=10),
+    "atr14": SweepFilters(atr_filter=True),
+    "long_atr14": SweepFilters(direction="long", atr_filter=True),
+    "short_atr14": SweepFilters(direction="short", atr_filter=True),
 }
 
 

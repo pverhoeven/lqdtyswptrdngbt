@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.backtest.walk_forward import WalkForwardWindow, run_walk_forward, summarize
 from src.config_loader import load_config
+from src.signals.filters import SweepFilters
 
 logging.basicConfig(
     level=logging.INFO,
@@ -176,16 +177,19 @@ def _write_report(
     train_months: int,
     test_months: int,
     out_path: Path,
+    filters: "SweepFilters | None" = None,
 ) -> None:
     now  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     is_s = cfg["split"]["in_sample_start"]
     is_e = cfg["split"]["in_sample_end"]
+    filter_str = str(filters) if filters is not None else "baseline"
 
     sections = [
         f"# Edge-validatierapport\n",
         f"Gegenereerd: {now}  \n"
         f"Periode: {is_s} → {is_e}  \n"
-        f"Vensters: train={train_months}m / test={test_months}m\n",
+        f"Vensters: train={train_months}m / test={test_months}m  \n"
+        f"Filters: {filter_str}\n",
         "---\n",
     ]
 
@@ -263,6 +267,9 @@ def main() -> None:
     train_months = args.train or wf_cfg.get("train_months", 12)
     test_months  = args.test  or wf_cfg.get("test_months",  3)
 
+    filters = SweepFilters.from_config(cfg)
+    logger.info("Sweep-filters: %s", filters)
+
     coins = [c["symbol"] for c in cfg.get("coins", [{"symbol": cfg["data"]["symbol"]}])]
     available = [s for s in coins if _has_data(cfg, s)]
     missing   = [s for s in coins if s not in available]
@@ -284,6 +291,7 @@ def main() -> None:
                 start        = args.start,
                 end          = args.end,
                 symbol       = symbol,
+                filters      = filters,
             )
             results[symbol] = windows
         except Exception as exc:
@@ -294,7 +302,7 @@ def main() -> None:
         sys.exit(1)
 
     out_path = Path(args.out)
-    _write_report(results, cfg, train_months, test_months, out_path)
+    _write_report(results, cfg, train_months, test_months, out_path, filters=filters)
     print(f"\nRapport: {out_path.resolve()}\n")
 
 

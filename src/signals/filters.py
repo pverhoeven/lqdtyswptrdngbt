@@ -47,6 +47,19 @@ class SweepFilters:
         """True als deze richting door het direction-filter komt."""
         return self.direction == "both" or self.direction == direction
 
+    @classmethod
+    def from_config(cls, cfg: dict) -> "SweepFilters":
+        """Bouw SweepFilters vanuit de 'filters' sectie van config.yaml."""
+        f = cfg.get("filters", {})
+        return cls(
+            direction   = f.get("direction",   "both"),
+            regime      = f.get("regime",       False),
+            bos_confirm = f.get("bos_confirm",  False),
+            bos_window  = f.get("bos_window",   10),
+            atr_filter  = f.get("atr_filter",   False),
+            atr_window  = f.get("atr_window",   14),
+        )
+
     def __str__(self) -> str:
         parts = []
         if self.regime:
