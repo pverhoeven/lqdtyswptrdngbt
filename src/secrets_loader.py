@@ -71,6 +71,10 @@ def _load_from_oci_vault(vault_ocid: str) -> None:
 
     secrets_client = _make_secrets_client(oci)
 
+    compartment_ocid = os.environ.get("OCI_COMPARTMENT_OCID")
+    if not compartment_ocid:
+        raise EnvironmentError("OCI_COMPARTMENT_OCID is niet gezet")
+
     for name in _SECRET_NAMES:
         if os.environ.get(name):
             logger.debug("Secret '%s' al aanwezig in env, overgeslagen", name)
@@ -79,6 +83,7 @@ def _load_from_oci_vault(vault_ocid: str) -> None:
             bundle = secrets_client.get_secret_bundle_by_name(
                 secret_name=name,
                 vault_id=vault_ocid,
+                compartment_id=compartment_ocid,
             )
             encoded = bundle.data.secret_bundle_content.content
             os.environ[name] = base64.b64decode(encoded).decode("utf-8")
