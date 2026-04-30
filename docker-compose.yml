@@ -6,6 +6,7 @@ services:
         required: false   # niet nodig op Oracle Cloud (secrets via OCI Vault)
     environment:
       - OCI_VAULT_OCID   # wordt overgenomen uit host-omgeving als gezet
+      - OCI_COMPARTMENT_OCID   # wordt overgenomen uit host-omgeving als gezet
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
