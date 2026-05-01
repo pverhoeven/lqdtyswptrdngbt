@@ -265,11 +265,23 @@ class OKXFeed:
             return
         try:
             msg = json.loads(message)
+
+            # Log events (subscribe confirm, errors) op INFO
+            if "event" in msg:
+                logger.info("WS event: %s", msg)
+                return
+
             data = msg.get("data", [])
             if not data:
+                logger.debug("WS bericht zonder data: %s", message[:200])
                 return
 
             for row in data:
+                confirm = row[8] if len(row) > 8 else "ONTBREEKT"
+                logger.info(
+                    "WS candle ontvangen: len=%d confirm=%s ts=%s",
+                    len(row), confirm, row[0] if row else "?",
+                )
                 if len(row) >= 9 and row[8] == "1":  # confirm == "1" = gesloten
                     candle = {
                         "open_time": int(row[0]),
@@ -280,9 +292,10 @@ class OKXFeed:
                         "volume":    float(row[5]),
                     }
                     self._candle_queue.put(candle)
+                    logger.info("Gesloten candle in queue gezet: ts=%s", row[0])
 
         except Exception as exc:
-            logger.debug("WebSocket bericht parse fout: %s", exc)
+            logger.warning("WebSocket bericht parse fout: %s — raw: %s", exc, message[:200])
 
     def _on_error(self, ws, error) -> None:
         logger.warning("WebSocket fout: %s", error)
