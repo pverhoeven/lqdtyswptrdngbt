@@ -46,6 +46,7 @@ load_secrets()
 from src.config_loader import load_config
 from src.notifications.notifier import Notifier
 from src.signals.detector import SweepDetector
+from src.signals.ema_detector import EMADetector
 from src.signals.filters import SweepFilters
 from src.trading.broker.paper import PaperBroker
 from src.trading.funding_rate import build_funding_filter
@@ -104,6 +105,12 @@ def main() -> None:
         action="store_true",
         help="Trade alle coins uit config.yaml [coins]-sectie (paper en okx)",
     )
+    parser.add_argument(
+        "--strategy",
+        default="sweep",
+        choices=["sweep", "ema"],
+        help="Strategie: 'sweep' (SMC, standaard) of 'ema' (EMA crossover, frequent)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -158,12 +165,19 @@ def main() -> None:
     notifier = Notifier.from_cfg(cfg)
 
     # --- Detector ---
-    filters = _FILTER_PRESETS[args.filter]
-    detector = SweepDetector(
-        filters       = filters,
-        reward_ratio  = cfg["risk"]["reward_ratio"],
-        sl_buffer_pct = cfg["risk"]["sl_buffer_pct"],
-    )
+    if args.strategy == "ema":
+        detector = EMADetector(
+            reward_ratio  = cfg["risk"]["reward_ratio"],
+            sl_buffer_pct = cfg["risk"]["sl_buffer_pct"],
+        )
+        filters = None
+    else:
+        filters = _FILTER_PRESETS[args.filter]
+        detector = SweepDetector(
+            filters       = filters,
+            reward_ratio  = cfg["risk"]["reward_ratio"],
+            sl_buffer_pct = cfg["risk"]["sl_buffer_pct"],
+        )
 
     # --- OrderManager met circuit breaker ---
     cb_cfg         = cfg.get("risk", {}).get("circuit_breaker")
@@ -180,7 +194,7 @@ def main() -> None:
 
     # --- Regime provider ---
     regime_provider = None
-    if filters.regime and not args.no_regime:
+    if filters is not None and filters.regime and not args.no_regime:
         model_path = (
             Path(cfg["data"]["paths"]["processed"]) / "hmm_regime_model.pkl"
         )
@@ -195,12 +209,13 @@ def main() -> None:
             sys.exit(1)
 
     # --- Start ---
-    notifier.notify_started(symbol, args.filter, broker.equity())
+    strategy_label = f"ema5/13" if args.strategy == "ema" else args.filter
+    notifier.notify_started(symbol, strategy_label, broker.equity())
 
     print(f"\n{'='*55}")
     print(f"  LIVE TRADER GESTART  [{args.exchange.upper()}]")
-    print(f"  Symbool:  {symbol}")
-    print(f"  Filter:   {args.filter}")
+    print(f"  Symbool:   {symbol}")
+    print(f"  Strategie: {strategy_label}")
     print(f"  Equity:   {broker.equity():.2f} USDT")
     print(f"  CB:       {cb_cfg or 'uitgeschakeld'}")
     if cfg["notifications"]["telegram"]["enabled"]:

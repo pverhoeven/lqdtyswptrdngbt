@@ -12,4 +12,4 @@ COPY config/ ./config/
 # Zorg dat logs en data mappen bestaan (worden via volumes overschreven)
 RUN mkdir -p data logs
 
-CMD ["python", "scripts/run_live_trader.py", "--exchange", "okx", "--filter", "long_only"]
+CMD ["python", "scripts/run_live_trader.py", "--exchange", "okx", "--strategy", "ema"]
