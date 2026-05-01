@@ -118,7 +118,7 @@ class OKXBroker(AbstractBroker):
         import requests
         try:
             resp = requests.get(
-                "https://www.okx.com/api/v5/public/instruments",
+                "https://eea.okx.com/api/v5/public/instruments",
                 params={"instType": "SWAP", "instId": self._inst_id},
                 timeout=10,
             )

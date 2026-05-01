@@ -32,7 +32,6 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_WS_PUBLIC_URL = "wss://ws.okx.com:8443/ws/v5/public"
 _PING_INTERVAL = 25      # seconden tussen heartbeats
 _MAX_BACKOFF   = 30      # maximale reconnect wachttijd in seconden
 
@@ -58,6 +57,7 @@ class OKXFeed:
                 "Voer uit: pip install websocket-client"
             )
 
+        okx_cfg = cfg["okx"]
         drv_cfg = cfg["derivatives"]
         self._inst_id      = symbol or drv_cfg["symbol"]  # bijv. "BTC-USDT-SWAP"
         self._swing_length = cfg["smc"]["swing_length"]
@@ -68,6 +68,13 @@ class OKXFeed:
         minutes = int(match.group(1)) if match else 15
         self._channel = f"candle{minutes}m"              # "candle15m"
         self._interval_minutes = minutes
+
+        # Kies public WS URL op basis van testnet-vlag (candle channel is publiek)
+        is_testnet = okx_cfg.get("testnet", True)
+        if is_testnet:
+            self._ws_url = "wss://wseeapap.okx.com:8443/ws/v5/public"
+        else:
+            self._ws_url = "wss://wseea.okx.com:8443/ws/v5/public"
 
         self._buffer: deque[dict] = deque(maxlen=self._buffer_size)
         self._last_candle_ts: pd.Timestamp | None = None
@@ -136,7 +143,7 @@ class OKXFeed:
         """Haal historische candles op via OKX REST API voor initiële buffer."""
         try:
             import requests
-            url = "https://www.okx.com/api/v5/market/history-candles"
+            url = "https://eea.okx.com/api/v5/market/history-candles"
             params = {
                 "instId": self._inst_id,
                 "bar":    self._channel.replace("candle", ""),  # "15m"
@@ -166,7 +173,7 @@ class OKXFeed:
         """Haal de laatste candles op na reconnect om eventuele gaps te dichten."""
         try:
             import requests
-            url = "https://www.okx.com/api/v5/market/history-candles"
+            url = "https://eea.okx.com/api/v5/market/history-candles"
             params = {
                 "instId": self._inst_id,
                 "bar":    self._channel.replace("candle", ""),
@@ -210,7 +217,7 @@ class OKXFeed:
         while self._running:
             try:
                 ws = websocket.WebSocketApp(
-                    _WS_PUBLIC_URL,
+                    self._ws_url,
                     on_open    = self._on_open,
                     on_message = self._on_message,
                     on_error   = self._on_error,
@@ -277,11 +284,6 @@ class OKXFeed:
                 return
 
             for row in data:
-                confirm = row[8] if len(row) > 8 else "ONTBREEKT"
-                logger.info(
-                    "WS candle ontvangen: len=%d confirm=%s ts=%s",
-                    len(row), confirm, row[0] if row else "?",
-                )
                 if len(row) >= 9 and row[8] == "1":  # confirm == "1" = gesloten
                     candle = {
                         "open_time": int(row[0]),

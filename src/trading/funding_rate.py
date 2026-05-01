@@ -17,7 +17,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_OKX_FUNDING_URL = "https://www.okx.com/api/v5/public/funding-rate"
+_OKX_FUNDING_URL = "https://eea.okx.com/api/v5/public/funding-rate"
 
 
 class FundingRateFilter:
