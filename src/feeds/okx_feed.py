@@ -107,11 +107,16 @@ class OKXFeed:
         try:
             candle_dict = self._candle_queue.get_nowait()
         except queue.Empty:
+            logger.info("poll: queue leeg — geen gesloten candle ontvangen via WebSocket")
             return None
 
         closed_ts = pd.Timestamp(candle_dict["open_time"], unit="ms", tz="UTC")
 
         if self._last_candle_ts is not None and closed_ts <= self._last_candle_ts:
+            logger.debug(
+                "poll: dubbele candle overgeslagen (closed_ts=%s <= last=%s)",
+                closed_ts, self._last_candle_ts,
+            )
             return None
 
         self._buffer.append(candle_dict)
