@@ -57,7 +57,6 @@ class OKXFeed:
                 "Voer uit: pip install websocket-client"
             )
 
-        okx_cfg = cfg["okx"]
         drv_cfg = cfg["derivatives"]
         self._inst_id      = symbol or drv_cfg["symbol"]  # bijv. "BTC-USDT-SWAP"
         self._swing_length = cfg["smc"]["swing_length"]
@@ -69,12 +68,9 @@ class OKXFeed:
         self._channel = f"candle{minutes}m"              # "candle15m"
         self._interval_minutes = minutes
 
-        # Kies public WS URL op basis van testnet-vlag (candle channel is publiek)
-        is_testnet = okx_cfg.get("testnet", True)
-        if is_testnet:
-            self._ws_url = "wss://wseeapap.okx.com:8443/ws/v5/public"
-        else:
-            self._ws_url = "wss://wseea.okx.com:8443/ws/v5/public"
+        # candle{bar} is marktdata → altijd productie business endpoint
+        # (demo endpoint wseeapap ondersteunt geen marktdata channels)
+        self._ws_url = "wss://wseea.okx.com:8443/ws/v5/business"
 
         self._buffer: deque[dict] = deque(maxlen=self._buffer_size)
         self._last_candle_ts: pd.Timestamp | None = None
