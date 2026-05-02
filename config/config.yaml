@@ -9,7 +9,7 @@
 data:
   symbol: "BTCUSDT"
   base_interval: "1m"           # Enkel interval dat via API wordt opgehaald
-  start_date: "2019-01-01"
+  start_date: "2017-08-01"
   end_date: null                 # null = tot vandaag
 
   # Hogere timeframes worden lokaal berekend via upsampling
@@ -33,18 +33,14 @@ data:
 split:
   in_sample_start:  "2017-08-01"
   in_sample_end:    "2022-12-31"
-  #in_sample_start: "2021-01-01"
-  #in_sample_end: "2025-12-31"
   oos_start:        "2023-01-01"
   oos_end:          "2024-12-31"
-  #oos_start:        "2025-01-01"
-  #oos_end:          "2025-12-31"
 
 # -----------------------------------------------------------------------------
 # SMC signalen (15m)
 # -----------------------------------------------------------------------------
 smc:
-  swing_length: 20               # Lookback voor swing highs/lows
+  swing_length: 10               # Lookback voor swing highs/lows
 
   # Cache metadata
   lib_version: "0.0.27"          # Bij versiewijziging: gehele cache herbouwen
@@ -113,10 +109,10 @@ risk:
 # Sweep filters (standaard configuratie)
 # -----------------------------------------------------------------------------
 filters:
-  direction: "long"        # "long" | "short" | "both"
+  direction: "both"        # "long" | "short" | "both"
   regime: false            # HMM regime filter
-  bos_confirm: false       # Wacht op BOS bevestiging
-  bos_window: 10           # Aantal candles om BOS te zoeken
+  bos_confirm: true        # Wacht op BOS bevestiging
+  bos_window: 20           # Aantal candles om BOS te zoeken
   atr_filter: false        # Alleen traden bij hoge volatiliteit (ATR > ATR_MA)
   atr_window: 14           # Rolling window voor ATR gemiddelde
 
