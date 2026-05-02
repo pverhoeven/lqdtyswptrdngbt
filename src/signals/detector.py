@@ -104,6 +104,8 @@ class SweepDetector:
         self._pending:     _PendingSweep | None = None
         self._candle_count = 0
         self._atr_buf:     deque[float] = deque(maxlen=filters.atr_window)
+        _lb = filters.pre_sweep_lookback if filters.pre_sweep_lookback > 0 else 1
+        self._close_buf:   deque[float] = deque(maxlen=_lb)
 
     # ------------------------------------------------------------------
     # Publieke interface
@@ -156,9 +158,12 @@ class SweepDetector:
             if new_signal is not None and signal is None:
                 signal = new_signal
 
-        # ATR buffer na verwerking bijwerken (rolling window van vorige candles)
+        # Buffers bijwerken ná verwerking (bevatten altijd vorige candles, niet huidige)
         if not _is_nan(atr_val) and atr_val > 0:
             self._atr_buf.append(atr_val)
+        close_val = _safe_float(ohlc_row.get("close", float("nan")))
+        if not _is_nan(close_val):
+            self._close_buf.append(close_val)
 
         return signal
 
@@ -167,6 +172,7 @@ class SweepDetector:
         self._pending      = None
         self._candle_count = 0
         self._atr_buf.clear()
+        self._close_buf.clear()
 
     @property
     def has_pending(self) -> bool:
@@ -205,6 +211,39 @@ class SweepDetector:
             if direction == "short" and regime is True:
                 logger.debug("Sweep gefilterd (bullish regime, short sweep) op %s", ts)
                 return None
+
+        # --- Filter: sweep rejection ---
+        # Long vereist groene candle (close > open): wick sweept low maar sluit omhoog
+        # Short vereist rode candle (close < open): wick sweept high maar sluit omlaag
+        if self._filters.sweep_rejection:
+            candle_open  = _safe_float(ohlc_row.get("open", float("nan")))
+            candle_close = _safe_float(ohlc_row.get("close", float("nan")))
+            if not (_is_nan(candle_open) or _is_nan(candle_close)):
+                if direction == "long"  and candle_close <= candle_open:
+                    logger.debug("Sweep gefilterd (rode candle bij long sweep) op %s", ts)
+                    return None
+                if direction == "short" and candle_close >= candle_open:
+                    logger.debug("Sweep gefilterd (groene candle bij short sweep) op %s", ts)
+                    return None
+
+        # --- Filter: pre-sweep trend richting ---
+        # Long: prijs moet N candles geleden hoger hebben gelegen (van boven gekomen)
+        # Short: prijs moet N candles geleden lager hebben gelegen (van onder gekomen)
+        if self._filters.pre_sweep_lookback > 0:
+            lb = self._filters.pre_sweep_lookback
+            if len(self._close_buf) < lb:
+                logger.debug("Pre-sweep filter: warmup (%d/%d) op %s",
+                             len(self._close_buf), lb, ts)
+                return None
+            close_n_ago  = self._close_buf[0]   # oudste = N candles geleden
+            close_now    = _safe_float(ohlc_row.get("close", float("nan")))
+            if not _is_nan(close_n_ago) and not _is_nan(close_now):
+                if direction == "long"  and close_n_ago <= close_now:
+                    logger.debug("Pre-sweep filter: prijs niet van boven gekomen op %s", ts)
+                    return None
+                if direction == "short" and close_n_ago >= close_now:
+                    logger.debug("Pre-sweep filter: prijs niet van onder gekomen op %s", ts)
+                    return None
 
         # --- Filter: ATR (hoge volatiliteit = trending markt) ---
         if self._filters.atr_filter:

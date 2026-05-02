@@ -76,6 +76,10 @@ _FILTER_PRESETS: dict[str, SweepFilters] = {
     "atr14": SweepFilters(atr_filter=True),
     "long_atr14": SweepFilters(direction="long", atr_filter=True),
     "short_atr14": SweepFilters(direction="short", atr_filter=True),
+    # Nieuwe SMC-kwaliteitsfilters
+    "rejection":           SweepFilters(bos_confirm=True, bos_window=20, sweep_rejection=True),
+    "trend20":             SweepFilters(bos_confirm=True, bos_window=20, pre_sweep_lookback=20),
+    "rejection+trend20":   SweepFilters(bos_confirm=True, bos_window=20, sweep_rejection=True, pre_sweep_lookback=20),
 }
 
 

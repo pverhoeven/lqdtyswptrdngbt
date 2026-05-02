@@ -26,12 +26,14 @@ class SweepFilters:
     bos_window : int
         Aantal candles na sweep om BOS te zoeken.
     """
-    regime:      bool = False
-    direction:   str  = "both"   # "long" | "short" | "both"
-    bos_confirm: bool = False
-    bos_window:  int  = 10
-    atr_filter:  bool = False
-    atr_window:  int  = 14       # rolling window voor ATR gemiddelde
+    regime:             bool = False
+    direction:          str  = "both"   # "long" | "short" | "both"
+    bos_confirm:        bool = False
+    bos_window:         int  = 10
+    atr_filter:         bool = False
+    atr_window:         int  = 14       # rolling window voor ATR gemiddelde
+    sweep_rejection:    bool = False    # long: sweep-candle sluit groen (rejection van low); short: rood
+    pre_sweep_lookback: int  = 0        # 0 = uit; N = prijs moet N candles geleden hoger liggen (long)
 
     def __post_init__(self) -> None:
         if self.direction not in ("long", "short", "both", "dynamic"):
@@ -42,6 +44,8 @@ class SweepFilters:
             raise ValueError("bos_window moet minimaal 1 zijn")
         if self.atr_window < 1:
             raise ValueError("atr_window moet minimaal 1 zijn")
+        if self.pre_sweep_lookback < 0:
+            raise ValueError("pre_sweep_lookback moet 0 of positief zijn")
 
     def allows(self, direction: str) -> bool:
         """True als deze richting door het direction-filter komt."""
@@ -72,4 +76,8 @@ class SweepFilters:
             parts.append(f"bos{self.bos_window}")
         if self.atr_filter:
             parts.append(f"atr{self.atr_window}")
+        if self.sweep_rejection:
+            parts.append("rejection")
+        if self.pre_sweep_lookback > 0:
+            parts.append(f"trend{self.pre_sweep_lookback}")
         return "+".join(parts) if parts else "baseline"
