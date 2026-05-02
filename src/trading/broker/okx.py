@@ -33,7 +33,7 @@ from src.trading.broker.base import AbstractBroker, Order, OrderSide, OrderStatu
 
 logger = logging.getLogger(__name__)
 
-_CONTRACT_SIZE_FALLBACK = 0.01   # BTC-USDT-SWAP fallback
+_CONTRACT_SIZE_FALLBACK = 0.0001  # BTC XPERP fallback (0.01 voor BTC-USDT-SWAP)
 _RECONCILE_LOG = Path("logs/reconcile.jsonl")
 
 
@@ -83,7 +83,8 @@ class OKXBroker(AbstractBroker):
         flag       = "1" if okx_cfg.get("testnet", True) else "0"  # "1" = demo/testnet
         base_url   = okx_cfg.get("base_url", "https://www.okx.com")
 
-        self._inst_id    = symbol   or drv_cfg["symbol"]      # bijv. "ETH-USDT-SWAP"
+        self._inst_id    = symbol   or drv_cfg["symbol"]
+        self._inst_type  = drv_cfg.get("inst_type", "SWAP")   # "FUTURES" voor XPERP
         self._leverage   = str(leverage or drv_cfg["leverage"])
         self._mgn_mode   = drv_cfg["margin_mode"]
         self._pending_ttl = drv_cfg.get("pending_order_ttl_candles", 5)
@@ -119,7 +120,7 @@ class OKXBroker(AbstractBroker):
         try:
             resp = requests.get(
                 "https://eea.okx.com/api/v5/public/instruments",
-                params={"instType": "SWAP", "instId": self._inst_id},
+                params={"instType": self._inst_type, "instId": self._inst_id},
                 timeout=10,
             )
             resp.raise_for_status()

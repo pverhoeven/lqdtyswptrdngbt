@@ -149,8 +149,9 @@ okx:
   base_url:    "https://eea.okx.com"
 
 derivatives:
-  symbol:        "BTC-USDT-SWAP"   # perpetual swap
-  leverage:      5                 # 1–125x
+  symbol:        "BTC-USD_UM_XPERP-310404"  # EU XPERP (EEA-compliant perpetual futures)
+  inst_type:     "FUTURES"                  # "FUTURES" voor XPERP, "SWAP" voor gewone perps
+  leverage:      5                          # 1–50x (XPERP max = 50)
   margin_mode:   "isolated"        # "isolated" of "cross"
   position_mode: "net_mode"        # "net_mode" = one-way (long of short, niet beide)
   pending_order_ttl_candles: 5     # annuleer limit order na N candles zonder fill
@@ -177,15 +178,18 @@ notifications:
 # -----------------------------------------------------------------------------
 coins:
   - symbol: "BTCUSDT"
-    swap_symbol: "BTC-USDT-SWAP"
+    swap_symbol: "BTC-USD_UM_XPERP-310404"
+    inst_type: "FUTURES"
     tier: "large_cap"
     leverage: 5
   - symbol: "ETHUSDT"
-    swap_symbol: "ETH-USDT-SWAP"
+    swap_symbol: "ETH-USD_UM_XPERP-310404"
+    inst_type: "FUTURES"
     tier: "large_cap"
     leverage: 5
   - symbol: "SOLUSDT"
-    swap_symbol: "SOL-USDT-SWAP"
+    swap_symbol: "SOL-USD_UM_XPERP-310404"
+    inst_type: "FUTURES"
     tier: "mid_cap"
     leverage: 3
 
