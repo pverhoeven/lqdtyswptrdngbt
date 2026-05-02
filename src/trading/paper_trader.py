@@ -99,6 +99,7 @@ class PaperTrader:
 
         logger.info("Feed warmup starten…")
         self._feed.warmup()
+        self._warmup_detector()
 
         next_poll = self._next_candle_close()
         print(f"Wachten op eerste candle-close: "
@@ -120,6 +121,18 @@ class PaperTrader:
 
         except KeyboardInterrupt:
             self.stop()
+
+    def _warmup_detector(self) -> None:
+        """Pre-warm de detector met historische buffer-candles (signalen worden genegeerd)."""
+        if not hasattr(self._feed, "history_df"):
+            return
+        df = self._feed.history_df()
+        if df.empty:
+            return
+        empty_smc = pd.Series(dtype=float)
+        for _ts, row in df.iterrows():
+            self._detector.on_candle(row, empty_smc)
+        logger.info("Detector warmup: %d historische candles verwerkt.", len(df))
 
     def stop(self) -> None:
         """Stop de loop netjes."""

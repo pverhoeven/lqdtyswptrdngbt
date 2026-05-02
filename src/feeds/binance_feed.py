@@ -98,6 +98,12 @@ class BinanceFeed:
     # Poll
     # ------------------------------------------------------------------
 
+    def history_df(self) -> pd.DataFrame:
+        """Retourneert de huidige buffer als DataFrame voor detector-warmup."""
+        if not self._buffer:
+            return pd.DataFrame()
+        return self._buffer_to_df()
+
     def poll(self) -> tuple[pd.Series, pd.Series] | None:
         """
         Controleer of er een nieuwe gesloten candle beschikbaar is.

@@ -102,6 +102,12 @@ class OKXFeed:
     # Poll (identieke interface als BinanceFeed)
     # ------------------------------------------------------------------
 
+    def history_df(self) -> pd.DataFrame:
+        """Retourneert de huidige buffer als DataFrame voor detector-warmup."""
+        if not self._buffer:
+            return pd.DataFrame()
+        return self._buffer_to_df()
+
     def poll(self) -> tuple[pd.Series, pd.Series] | None:
         """
         Retourneert (ohlc_row, smc_row) van de nieuwste gesloten candle,
