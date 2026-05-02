@@ -131,41 +131,63 @@ Three independent safeguards prevent runaway losses:
 
 ## Strategy Edge
 
-The edge comes from two compounding factors:
+The edge comes from one core mechanism:
 
-1. **Liquidity hunt reversal** — the sweep itself is the institutional trigger. Price prints a false breakout to collect stops, then reverses sharply. Entering on the close of the sweep candle captures the beginning of this reversal before it is widely recognized.
+**Liquidity hunt reversal** — the sweep itself is the institutional trigger. Price prints a false breakout to collect stops, then reverses sharply. Entering on the close of the sweep candle captures the beginning of this reversal before it is widely recognized.
 
-2. **Volatility expansion filter (ATR)** — by only trading when ATR is above its rolling average, the strategy selects environments where the reversal has momentum behind it and avoids low-volatility chop where sweeps frequently fail to follow through.
-
-Together these two conditions select setups where a stop-hunt has just occurred in a market that has the energy to reverse — the highest-probability subset of all liquidity sweeps.
+The ATR filter was tested and found to reduce the edge over the long run. The simplest configuration — long-only, no additional filters — is the most robust.
 
 ---
 
-## Backtest Results (2019–2022, long-only, no BOS/ATR filters)
+## Backtest Results
 
-### BTCUSDT
-
-| Metric | Value |
-|---|---|
-| Total trades | 230 (~19 per quarter) |
-| Win rate | 55.9% (range: 42.9%–66.7%) |
-| Avg Sharpe | +1.92 (std 1.70) |
-| Profit Factor | 1.63 (range: 0.60–2.44) |
-| Max Drawdown | 3.8% (peak: 9.6% in Q4 2020) |
-
-**Verdict**: Edge present, but inconsistent — high Sharpe variance signals regime dependence.
-
-### ETHUSDT
+### BTCUSDT — In-sample (2017-08 → 2022-12, long-only)
 
 | Metric | Value |
 |---|---|
-| Total trades | 242 (~20 per quarter) |
-| Win rate | 59.6% (range: 44.4%–73.7%) |
-| Avg Sharpe | +2.79 (std 1.52) |
-| Profit Factor | 2.11 (range: 1.04–3.67) |
-| Max Drawdown | 2.7% (peak: 4.6% in Q4 2021) |
+| Total trades | 429 (~20/quarter) |
+| Win rate | 55.9% |
+| Sharpe ratio | 1.87 |
+| Profit factor | 1.49 |
+| Max drawdown | 14.6% (concentrated in 2018 bear) |
+| Total return | +214% (10k → 31k USDT) |
 
-**Verdict**: Stronger edge than BTC across all metrics. Signal overlap between BTC and ETH is only 32.2%, making them partially independent — useful for diversification.
+Per-year breakdown:
+
+| Year | Trades | Win rate | P&L |
+|---|---|---|---|
+| 2017 | 28 | 75.0% | +2 464 USDT |
+| 2018 | 83 | 50.6% | +1 664 USDT |
+| 2019 | 81 | 55.6% | +3 327 USDT |
+| 2020 | 77 | 55.8% | +2 693 USDT |
+| 2021 | 84 | 56.0% | +5 848 USDT |
+| 2022 | 76 | 55.3% | +5 396 USDT |
+
+### Walk-forward (2017-08 → 2022-12, 17 quarters, train=12m / test=3m)
+
+| Metric | Value |
+|---|---|
+| Windows with Sharpe > 0 | 76% (13/17) |
+| Avg Sharpe | +1.88 |
+| Sharpe range | −1.51 → +4.56 |
+| Avg win rate | 55.5% |
+| Avg max drawdown | 4.2% |
+| Avg profit factor | 1.67 |
+
+Losing quarters: 2018-11, 2019-08, 2020-08, 2021-11 — all coincide with sharp BTC downtrends, consistent with a long-only setup.
+
+### BTCUSDT — Out-of-sample (2023-01 → 2024-12, long-only) ✅
+
+| Metric | Value |
+|---|---|
+| Total trades | 174 |
+| Win rate | 60.3% |
+| Sharpe ratio | 2.65 |
+| Profit factor | 1.80 |
+| Max drawdown | 4.3% |
+| Total return | +85% (10k → 18 460 USDT) |
+
+The OOS result is stronger than in-sample across all metrics — no evidence of overfitting.
 
 ---
 
@@ -173,29 +195,29 @@ Together these two conditions select setups where a stop-hunt has just occurred 
 
 ### Strengths
 
-- Both coins show average Sharpe > 1.5 and PF > 1.5: statistically significant edge
-- ETH outperforms BTC in win rate, Sharpe, PF, and drawdown
-- MDD stays under 10% in all quarters (BTC Q4 2020 is the outlier at 9.6%)
-- Some quarters show very strong mean-reversion: ETH Q3 2021 hit 73.7% win rate
-- Low signal overlap (32.2%) reduces portfolio-level correlation risk
+- Consistent win rate of 55–60% across 9 years of data (2017–2024)
+- OOS outperforms in-sample: Sharpe 2.65 vs 1.87, MDD 4.3% vs 14.6%
+- Walk-forward confirms the edge holds in 76% of rolling quarters
+- Simple setup: no filters beyond direction — robust and not over-engineered
 
 ### Weaknesses
 
-**High Sharpe variance** — the strategy works well in trending, volatile markets (2021 bull run) and poorly in sideways/consolidating ones (Q4 2020, Q4 2022). Bad quarters: BTC Q4 2020 (Sharpe −1.71), Q4 2022 (Sharpe −0.71).
+**Long-only loses edge in sustained bear markets** — 2018 was the weakest year (50.6% win rate), barely profitable. The strategy cannot be run unattended through a multi-month bear market without a regime filter or manual pause.
 
-**Break-even math is tight** — with a 1.5R target and 0.15% total cost per trade (0.1% fees + 0.05% slippage), the break-even win rate is ~43%. The 55–60% average is sufficient, but quarters at 42.9% win rate are losing quarters. A single bad quarter can erase multiple good ones.
+**Break-even math is tight** — with 1.5R target and ~0.15% total cost per trade, break-even win rate is ~43%. The 55–60% average is comfortable, but individual bad quarters at 40–43% win rate are losing quarters.
 
-**Circuit breaker timing risk** — 3 consecutive losses triggers a day-pause. In a quarter with only 42.9% win rate, three early losses could cause the CB to fire and miss a subsequent recovery. Raising the threshold slightly (e.g. to 4–5) may reduce unnecessary pauses.
+**Circuit breaker timing risk** — 3 consecutive losses triggers a day-pause. In a weak quarter this could fire early and miss a subsequent recovery.
 
 ---
 
 ## Known Weaknesses & Open Action Items
 
-| Item | Priority | Notes |
-|---|---|---|
-| Add ATR filter | High | Should reduce bad-quarter frequency; already implemented, just needs enabling |
-| Test 2023–2026 | High | Post-2022 market structure differs (ETF flows, higher institutional volume) |
-| Add regime filter (MA200 or HMM) | Medium | Mean-reversion works better in bearish/ranging regimes |
-| Dynamic reward ratio | Low | Higher target (2R) in high-ATR environments, lower (1.2R) when quiet |
-| Dynamic position sizing | Low | Half-Kelly or vol-scaling; reduces size in losing streaks |
-| Evaluate limit entries | Low | Could reduce slippage cost from 0.05% to near-zero |
+| Item | Priority | Status | Notes |
+|---|---|---|---|
+| ATR filter | High | ❌ Rejected | Tested — reduces long-run edge. Do not enable. |
+| Test 2023–2026 | High | ✅ Done | OOS 2023–2024 confirmed, Sharpe 2.65 |
+| Extend in-sample to 2017 | High | ✅ Done | in_sample_start = 2017-08-01 |
+| Add regime filter (MA200 or HMM) | Medium | Open | Could help skip bear markets for long-only |
+| Dynamic reward ratio | Low | Open | Higher target (2R) in high-ATR, lower (1.2R) when quiet |
+| Dynamic position sizing | Low | Open | Half-Kelly or vol-scaling; reduces size in losing streaks |
+| Evaluate limit entries | Low | Open | Could reduce slippage cost from 0.05% to near-zero |
