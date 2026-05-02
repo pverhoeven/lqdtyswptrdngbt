@@ -96,6 +96,10 @@ def main() -> None:
         help="Welke filter te gebruiken (standaard: all = vergelijk alle)",
     )
     parser.add_argument("--config", default=None)
+    parser.add_argument(
+        "--ttl", type=int, default=0,
+        help="Limit order TTL in candles (0 = directe fill). Gebruik 5 voor fill-simulatie.",
+    )
     args = parser.parse_args()
 
     if args.period is None and args.set is None:
@@ -152,7 +156,7 @@ def main() -> None:
               f"--set {args.set} --filter <beste configuratie>")
         return
 
-    _run_single(cfg, args.filter, dataset=args.set, allow_oos=is_oos)
+    _run_single(cfg, args.filter, dataset=args.set, allow_oos=is_oos, ttl=args.ttl)
 
 
 def _run_stress_mode(cfg: dict, args) -> None:
@@ -266,16 +270,18 @@ def _run_stress_mode(cfg: dict, args) -> None:
     _print_detail(cfg, metrics, trades)
 
 
-def _run_single(cfg, filter_name, dataset, allow_oos):
+def _run_single(cfg, filter_name, dataset, allow_oos, ttl: int = 0):
     """Voer één filter uit op een dataset en druk gedetailleerde output af."""
     f = _FILTER_PRESETS[filter_name]
     print(f"\n{'='*55}")
     print(f"  SWEEP BACKTEST — {filter_name.upper()} ({dataset.upper()})")
+    if ttl > 0:
+        print(f"  Fill-simulatie: limit TTL = {ttl} candles ({ttl * 15} min)")
     print(f"{'='*55}")
 
     try:
         metrics, trades = run_sweep_backtest(
-            cfg, dataset=dataset, filters=f, allow_oos=allow_oos
+            cfg, dataset=dataset, filters=f, allow_oos=allow_oos, pending_ttl=ttl
         )
     except (ValueError, FileNotFoundError) as exc:
         logger.error("%s", exc)

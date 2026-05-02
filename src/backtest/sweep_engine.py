@@ -24,13 +24,19 @@ __all__ = ["SweepFilters", "run_sweep_backtest", "compare_filters"]
 
 
 def run_sweep_backtest(
-    cfg:       dict | None = None,
-    dataset:   str  = "in_sample",
-    filters:   SweepFilters | None = None,
-    allow_oos: bool = False,
-    start:     str | None = None,
-    end:       str | None = None,
+    cfg:          dict | None = None,
+    dataset:      str  = "in_sample",
+    filters:      SweepFilters | None = None,
+    allow_oos:    bool = False,
+    start:        str | None = None,
+    end:          str | None = None,
+    pending_ttl:  int = 0,
 ) -> tuple[BacktestMetrics, list[Trade]]:
+    """
+    pending_ttl : int
+        Aantal candles dat een limit order open blijft. 0 = directe fill
+        (oorspronkelijk gedrag). Gebruik 5 om live order-fill te simuleren.
+    """
     if cfg is None:
         cfg = load_config()
     if filters is None:
@@ -47,9 +53,16 @@ def run_sweep_backtest(
     if df_15m.empty:
         raise RuntimeError("Geen 15m data voor de opgegeven periode.")
 
-    trades = _run_loop(cfg, df_15m, cache, regimes_15m, filters, ma200)
+    trades, signals_total, signals_filled = _run_loop(
+        cfg, df_15m, cache, regimes_15m, filters, ma200, pending_ttl
+    )
     logger.info("Klaar: %d trades", len(trades))
-    return compute_metrics(trades, cfg["risk"]["capital_initial"]), trades
+
+    metrics = compute_metrics(trades, cfg["risk"]["capital_initial"])
+    if pending_ttl > 0 and signals_total > 0:
+        metrics.fill_rate     = signals_filled / signals_total
+        metrics.signals_count = signals_total
+    return metrics, trades
 
 
 def compare_filters(
@@ -161,14 +174,13 @@ def _load_data(cfg, start, end):
 # Backtest loop
 # ---------------------------------------------------------------------------
 
-def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None):
-    rcfg     = cfg["risk"]
-    fee_pct  = cfg["backtest"]["fee_pct"] / 100.0
-    slippage_pct  = cfg["backtest"]["slippage_pct"] / 100.0
-    capital  = rcfg["capital_initial"]
-    risk_pct = rcfg["risk_per_trade_pct"] / 100.0
-
-    is_dynamic = filters.direction == "dynamic"
+def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int = 0):
+    rcfg         = cfg["risk"]
+    fee_pct      = cfg["backtest"]["fee_pct"] / 100.0
+    slippage_pct = cfg["backtest"]["slippage_pct"] / 100.0
+    capital      = rcfg["capital_initial"]
+    risk_pct     = rcfg["risk_per_trade_pct"] / 100.0
+    is_dynamic   = filters.direction == "dynamic"
 
     detector = SweepDetector(
         filters       = filters,
@@ -176,14 +188,19 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None):
         sl_buffer_pct = rcfg["sl_buffer_pct"],
     )
 
-    trades:   list[Trade] = []
-    open_pos: _Position | None = None
+    trades:          list[Trade]      = []
+    open_pos:        _Position | None = None
+    pending:         _PendingLimit | None = None
+    signals_total    = 0
+    signals_filled   = 0
 
     for i, ts in enumerate(df_15m.index):
         ohlc_row      = df_15m.iloc[i].copy()
         ohlc_row.name = ts
         regime        = _get_regime(regimes, ts)
         smc_row       = cache.loc[ts] if ts in cache.index else _empty_smc_row()
+        low           = float(ohlc_row["low"])
+        high          = float(ohlc_row["high"])
 
         if is_dynamic and ma200 is not None:
             ma200_val = ma200.get(ts, float("nan"))
@@ -191,18 +208,59 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None):
                 "long" if (pd.isna(ma200_val) or ohlc_row["close"] > ma200_val) else "short"
             )
 
+        # Stap 1: open positie bewaken
         if open_pos is not None:
             result = open_pos.check(ohlc_row)
             if result:
-                trade      = _close(open_pos, result, ts, fee_pct,slippage_pct, capital)
+                trade    = _close(open_pos, result, ts, fee_pct, slippage_pct, capital)
                 trades.append(trade)
-                capital   += trade.pnl_capital
-                open_pos   = None
+                capital += trade.pnl_capital
+                open_pos = None
 
-        if open_pos is None:
-            signal = detector.on_candle(ohlc_row, smc_row, regime)
-            if signal is not None and signal.sl_distance > 0:
-                size     = (capital * risk_pct) / signal.sl_distance
+        # Stap 2: pending limit order proberen te vullen
+        if open_pos is None and pending is not None:
+            filled = (
+                (pending.direction == "long"  and low  <= pending.entry_price) or
+                (pending.direction == "short" and high >= pending.entry_price)
+            )
+            if filled:
+                signals_filled += 1
+                open_pos = _Position(
+                    direction   = pending.direction,
+                    entry_price = pending.entry_price,
+                    sl_price    = pending.sl_price,
+                    tp_price    = pending.tp_price,
+                    size        = pending.size,
+                    entry_ts    = ts,
+                    regime      = pending.regime,
+                )
+                pending = None
+            else:
+                pending.waited += 1
+                if pending.waited >= pending_ttl:
+                    pending = None
+
+        # Stap 3: detector altijd aanroepen (bewaart interne BOS-state)
+        signal = detector.on_candle(ohlc_row, smc_row, regime)
+
+        # Stap 4: nieuw signaal alleen verwerken als volledig vrij
+        if open_pos is None and pending is None and signal is not None and signal.sl_distance > 0:
+            signals_total += 1
+            size = (capital * risk_pct) / signal.sl_distance
+            if pending_ttl > 0:
+                pending = _PendingLimit(
+                    direction   = signal.direction,
+                    entry_price = signal.entry_price,
+                    sl_price    = signal.sl_price,
+                    tp_price    = signal.tp_price,
+                    size        = size,
+                    signal_ts   = ts,
+                    regime      = signal.regime,
+                    ttl         = pending_ttl,
+                )
+            else:
+                # Directe fill (oorspronkelijk gedrag)
+                signals_filled += 1
                 open_pos = _Position(
                     direction   = signal.direction,
                     entry_price = signal.entry_price,
@@ -216,12 +274,25 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None):
     if is_dynamic:
         filters.direction = "dynamic"
 
-    return trades
+    return trades, signals_total, signals_filled
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+@dataclass
+class _PendingLimit:
+    direction:   str
+    entry_price: float
+    sl_price:    float
+    tp_price:    float
+    size:        float
+    signal_ts:   pd.Timestamp
+    regime:      bool | None
+    ttl:         int
+    waited:      int = 0
+
 
 @dataclass
 class _Position:

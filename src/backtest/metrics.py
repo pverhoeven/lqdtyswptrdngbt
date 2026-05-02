@@ -44,17 +44,25 @@ class BacktestMetrics:
     profit_factor:  float
     total_return:   float        # cumulatief rendement
     avg_trade_pnl:  float        # gemiddeld P&L per trade in USDT
+    fill_rate:      float | None = None   # None = fill-simulatie niet gedraaid
+    signals_count:  int          = 0     # totaal aantal gedetecteerde signalen
 
     def __str__(self) -> str:
-        return (
-            f"Trades:         {self.trade_count}\n"
-            f"Win rate:       {self.win_rate:.1%}\n"
-            f"Sharpe ratio:   {self.sharpe_ratio:.2f}\n"
-            f"Max drawdown:   {self.max_drawdown:.1%}\n"
-            f"Profit factor:  {self.profit_factor:.2f}\n"
-            f"Total return:   {self.total_return:.1%}\n"
-            f"Avg trade P&L:  {self.avg_trade_pnl:.2f} USDT"
-        )
+        lines = [
+            f"Trades:         {self.trade_count}",
+            f"Win rate:       {self.win_rate:.1%}",
+            f"Sharpe ratio:   {self.sharpe_ratio:.2f}",
+            f"Max drawdown:   {self.max_drawdown:.1%}",
+            f"Profit factor:  {self.profit_factor:.2f}",
+            f"Total return:   {self.total_return:.1%}",
+            f"Avg trade P&L:  {self.avg_trade_pnl:.2f} USDT",
+        ]
+        if self.fill_rate is not None:
+            lines.append(
+                f"Fill rate:      {self.fill_rate:.1%}"
+                f"  ({self.trade_count}/{self.signals_count} signalen gevuld)"
+            )
+        return "\n".join(lines)
 
     def interpret(self) -> str:
         """Eenvoudige tekstinterpretatie van de resultaten (uit spec)."""
