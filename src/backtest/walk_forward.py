@@ -244,7 +244,7 @@ def _run_window(
     smc_cache   = smc_cache.loc[common_idx]
     regimes_15m = regimes_15m.reindex(common_idx)
 
-    trades = sweep_run_loop(cfg, df_15m_test, smc_cache, regimes_15m, filters or SweepFilters())
+    trades, _, _ = sweep_run_loop(cfg, df_15m_test, smc_cache, regimes_15m, filters or SweepFilters())
 
     metrics = compute_metrics(
         trades,

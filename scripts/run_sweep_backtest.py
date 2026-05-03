@@ -100,6 +100,7 @@ def main() -> None:
         help="Welke filter te gebruiken (standaard: all = vergelijk alle)",
     )
     parser.add_argument("--config", default=None)
+    parser.add_argument("--symbol", default=None, help="Symbool override (bijv. ETHUSDT)")
     parser.add_argument(
         "--ttl", type=int, default=0,
         help="Limit order TTL in candles (0 = directe fill). Gebruik 5 voor fill-simulatie.",
@@ -110,6 +111,8 @@ def main() -> None:
         parser.error("Geef --set of --period op.")
 
     cfg = load_config(args.config)
+    if args.symbol:
+        cfg["data"]["symbol"] = args.symbol
 
     # ── Stress-periode modus ────────────────────────────────────────────────
     if args.period is not None:
