@@ -140,13 +140,18 @@ def main() -> None:
             sys.exit(1)
 
     # --- Start ---
+    heartbeat_hours = cfg.get("notifications", {}).get("telegram", {}).get("heartbeat_hours")
     trader = PaperTrader(
-        feed           = feed,
-        detector       = detector,
-        order_manager  = order_manager,
-        regime_provider= regime_provider,
+        feed            = feed,
+        detector        = detector,
+        order_manager   = order_manager,
+        regime_provider = regime_provider,
+        heartbeat_hours = heartbeat_hours,
     )
+
+    notifier.notify_started(cfg["data"]["symbol"], args.filter, capital)
     trader.start()
+    notifier.notify_stopped(broker.equity())
 
 
 if __name__ == "__main__":
