@@ -38,6 +38,13 @@ def main() -> None:
         default=None,
         help="Enkel symbool verwerken (bijv. ETHUSDT). Standaard: alle coins uit config.",
     )
+    parser.add_argument(
+        "--lower-tf",
+        action="append",
+        dest="lower_tfs",
+        metavar="TF",
+        help="Extra lagere timeframe bouwen (bijv. '3min' of '5min'). Herhaalbaar.",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -58,8 +65,10 @@ def main() -> None:
         sym = coin["symbol"]
 
         if not args.skip_aggregate:
-            logger.info("=== %s — Stap 1/2: Upsampling 1m → 15m/4h ===", sym)
-            aggregate(cfg, symbol=sym)
+            extra = args.lower_tfs or []
+            label = "/".join(["15m", "4h"] + [tf.replace("min", "m") for tf in extra])
+            logger.info("=== %s — Stap 1/2: Upsampling 1m → %s ===", sym, label)
+            aggregate(cfg, symbol=sym, extra_tfs=extra if extra else None)
         else:
             logger.info("%s — Upsampling overgeslagen (--skip-aggregate).", sym)
 

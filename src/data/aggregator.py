@@ -36,9 +36,13 @@ _VALIDATION_SAMPLES = 20
 # Publieke interface
 # ---------------------------------------------------------------------------
 
-def aggregate(cfg: dict | None = None, symbol: str | None = None) -> None:
+def aggregate(
+    cfg: dict | None = None,
+    symbol: str | None = None,
+    extra_tfs: list[str] | None = None,
+) -> None:
     """
-    Lees 1m parquet-bestanden en schrijf 15m en 4h parquet weg.
+    Lees 1m parquet-bestanden en schrijf hogere-TF parquets weg.
 
     Parameters
     ----------
@@ -46,6 +50,8 @@ def aggregate(cfg: dict | None = None, symbol: str | None = None) -> None:
         Geladen config dict. Als None: laad automatisch.
     symbol : str, optional
         Symbool override (bijv. "ETHUSDT"). Standaard: cfg["data"]["symbol"].
+    extra_tfs : list[str], optional
+        Extra timeframes naast de standaard 15m/4h, bijv. ["3min", "5min"].
     """
     if cfg is None:
         cfg = load_config()
@@ -69,7 +75,11 @@ def aggregate(cfg: dict | None = None, symbol: str | None = None) -> None:
     logger.info("Geladen: %d candles (1m), %s → %s",
                 len(df_1m), df_1m.index[0].date(), df_1m.index[-1].date())
 
-    for label, rule in [(tf_signal, tf_signal), (tf_regime, tf_regime)]:
+    tfs = [(tf_signal, tf_signal), (tf_regime, tf_regime)]
+    for tf in (extra_tfs or []):
+        tfs.append((tf, tf))
+
+    for label, rule in tfs:
         friendly = label.replace("min", "m").replace("h", "h")
         out_path = processed_dir / f"{symbol}_{friendly}.parquet"
 

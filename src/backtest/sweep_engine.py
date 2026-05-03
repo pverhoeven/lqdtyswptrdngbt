@@ -7,8 +7,9 @@ Backtest en live trading gebruiken nu identieke signaallogica.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -49,12 +50,12 @@ def run_sweep_backtest(
         label = f"{dataset.upper()} ({start} → {end})"
     logger.info("Sweep backtest: %s filter=%s", label, filters)
 
-    df_15m, regimes_15m, cache, ma200 = _load_data(cfg, start, end)
+    df_15m, regimes_15m, cache, ma200, df_lower = _load_data(cfg, start, end, filters.micro_bos_tf)
     if df_15m.empty:
         raise RuntimeError("Geen 15m data voor de opgegeven periode.")
 
     trades, signals_total, signals_filled = _run_loop(
-        cfg, df_15m, cache, regimes_15m, filters, ma200, pending_ttl
+        cfg, df_15m, cache, regimes_15m, filters, ma200, pending_ttl, df_lower
     )
     logger.info("Klaar: %d trades", len(trades))
 
@@ -81,11 +82,15 @@ def compare_filters(
         "bos20":       SweepFilters(bos_confirm=True, bos_window=20),
         "regime_long": SweepFilters(regime=True, direction="long"),
         "regime_short":SweepFilters(regime=True, direction="short"),
-        "regime_bos10":SweepFilters(regime=True, bos_confirm=True, bos_window=10),
-        "long_bos10":  SweepFilters(direction="long",  bos_confirm=True, bos_window=10),
-        "short_bos10": SweepFilters(direction="short", bos_confirm=True, bos_window=10),
-        "long_atr14":    SweepFilters(direction="long", atr_filter=True),
-        "dynamic_200ma": SweepFilters(direction="dynamic"),
+        "regime_bos10":   SweepFilters(regime=True, bos_confirm=True, bos_window=10),
+        "long_bos10":     SweepFilters(direction="long",  bos_confirm=True, bos_window=10),
+        "short_bos10":    SweepFilters(direction="short", bos_confirm=True, bos_window=10),
+        "long_atr14":     SweepFilters(direction="long", atr_filter=True),
+        "dynamic_200ma":  SweepFilters(direction="dynamic"),
+        "micro_bos_3m":   SweepFilters(micro_bos_tf="3min", micro_bos_window=20),
+        "micro_bos_5m":   SweepFilters(micro_bos_tf="5min", micro_bos_window=20),
+        "long_micro_3m":  SweepFilters(direction="long",  micro_bos_tf="3min", micro_bos_window=20),
+        "short_micro_3m": SweepFilters(direction="short", micro_bos_tf="3min", micro_bos_window=20),
     }
 
     rows = []
@@ -114,7 +119,7 @@ def compare_filters(
 # Data laden
 # ---------------------------------------------------------------------------
 
-def _load_data(cfg, start, end):
+def _load_data(cfg, start, end, micro_bos_tf=None):
     from src.data.cache import load_cache
     from src.regime.hmm import align_regimes_to_15m, load_model, predict_regimes
 
@@ -167,30 +172,54 @@ def _load_data(cfg, start, end):
     df_15m      = df_15m.loc[common]
     cache       = cache.loc[common]
     regimes_15m = regimes_15m.reindex(common)
-    return df_15m, regimes_15m, cache, ma200
+
+    df_lower = None
+    if micro_bos_tf:
+        tf_friendly = micro_bos_tf.replace("min", "m")
+        path_lower  = processed_dir / f"{symbol}_{tf_friendly}.parquet"
+        if not path_lower.exists():
+            raise FileNotFoundError(
+                f"{path_lower} niet gevonden. "
+                f"Voer uit: python scripts/build_cache.py --lower-tf {micro_bos_tf}"
+            )
+        df_lower = pd.read_parquet(path_lower)
+        df_lower = df_lower[(df_lower.index >= ts_start) & (df_lower.index <= ts_end + pd.Timedelta(minutes=15))]
+        logger.info("Lagere-TF data geladen: %s (%d candles)", tf_friendly, len(df_lower))
+
+    return df_15m, regimes_15m, cache, ma200, df_lower
 
 
 # ---------------------------------------------------------------------------
 # Backtest loop
 # ---------------------------------------------------------------------------
 
-def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int = 0):
+def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int = 0, df_lower=None):
     rcfg         = cfg["risk"]
     fee_pct      = cfg["backtest"]["fee_pct"] / 100.0
     slippage_pct = cfg["backtest"]["slippage_pct"] / 100.0
     capital      = rcfg["capital_initial"]
     risk_pct     = rcfg["risk_per_trade_pct"] / 100.0
+    rr           = rcfg["reward_ratio"]
     is_dynamic   = filters.direction == "dynamic"
 
+    use_micro_bos = filters.micro_bos_tf is not None and df_lower is not None and len(df_lower) > 0
+
+    # Als micro-BoS actief is: detector doet géén BOS-bevestiging zelf (dat doen wij hier)
+    detector_filters = (
+        dataclasses.replace(filters, bos_confirm=False)
+        if use_micro_bos and filters.bos_confirm
+        else filters
+    )
     detector = SweepDetector(
-        filters       = filters,
-        reward_ratio  = rcfg["reward_ratio"],
+        filters       = detector_filters,
+        reward_ratio  = rr,
         sl_buffer_pct = rcfg["sl_buffer_pct"],
     )
 
-    trades:          list[Trade]      = []
-    open_pos:        _Position | None = None
-    pending:         _PendingLimit | None = None
+    trades:           list[Trade]         = []
+    open_pos:         _Position | None    = None
+    pending:          _PendingLimit | None = None
+    pending_micro:    _PendingMicroBoS | None = None
     signals_total    = 0
     signals_filled   = 0
 
@@ -217,7 +246,7 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
                 capital += trade.pnl_capital
                 open_pos = None
 
-        # Stap 2: pending limit order proberen te vullen
+        # Stap 2a: pending limit order proberen te vullen
         if open_pos is None and pending is not None:
             filled = (
                 (pending.direction == "long"  and low  <= pending.entry_price) or
@@ -240,14 +269,58 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
                 if pending.waited >= pending_ttl:
                     pending = None
 
+        # Stap 2b: pending micro-BoS controleren op lagere-TF candles binnen deze 15m-periode
+        if use_micro_bos and open_pos is None and pending is None and pending_micro is not None:
+            if ts > pending_micro.sweep_ts:
+                lower_end   = ts + pd.Timedelta(minutes=15)
+                lower_slice = df_lower[(df_lower.index >= ts) & (df_lower.index < lower_end)]
+                for lt_ts, lt_row in lower_slice.iterrows():
+                    lt_close = float(lt_row["close"])
+                    bos_ok = (
+                        (pending_micro.direction == "long"  and lt_close > pending_micro.liq_level) or
+                        (pending_micro.direction == "short" and lt_close < pending_micro.liq_level)
+                    )
+                    pending_micro.candles_seen += 1
+                    if bos_ok:
+                        sl     = pending_micro.sl_price
+                        sl_dist = abs(lt_close - sl)
+                        if sl_dist > 0:
+                            tp   = (lt_close + sl_dist * rr) if pending_micro.direction == "long" else (lt_close - sl_dist * rr)
+                            size = (capital * risk_pct) / sl_dist
+                            signals_filled += 1
+                            open_pos = _Position(
+                                direction   = pending_micro.direction,
+                                entry_price = lt_close,
+                                sl_price    = sl,
+                                tp_price    = tp,
+                                size        = size,
+                                entry_ts    = lt_ts,
+                                regime      = pending_micro.regime,
+                            )
+                        pending_micro = None
+                        break
+                    if pending_micro is not None and pending_micro.candles_seen >= pending_micro.window:
+                        pending_micro = None
+                        break
+
         # Stap 3: detector altijd aanroepen (bewaart interne BOS-state)
         signal = detector.on_candle(ohlc_row, smc_row, regime)
 
         # Stap 4: nieuw signaal alleen verwerken als volledig vrij
-        if open_pos is None and pending is None and signal is not None and signal.sl_distance > 0:
+        if open_pos is None and pending is None and pending_micro is None and signal is not None and signal.sl_distance > 0:
             signals_total += 1
-            size = (capital * risk_pct) / signal.sl_distance
-            if pending_ttl > 0:
+            if use_micro_bos and signal.liq_level > 0:
+                # Wacht op micro-BoS op lagere TF in plaats van directe entry
+                pending_micro = _PendingMicroBoS(
+                    direction    = signal.direction,
+                    liq_level    = signal.liq_level,
+                    sl_price     = signal.sl_price,
+                    regime       = signal.regime,
+                    sweep_ts     = ts,
+                    window       = filters.micro_bos_window,
+                )
+            elif pending_ttl > 0:
+                size = (capital * risk_pct) / signal.sl_distance
                 pending = _PendingLimit(
                     direction   = signal.direction,
                     entry_price = signal.entry_price,
@@ -260,6 +333,7 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
                 )
             else:
                 # Directe fill (oorspronkelijk gedrag)
+                size = (capital * risk_pct) / signal.sl_distance
                 signals_filled += 1
                 open_pos = _Position(
                     direction   = signal.direction,
@@ -292,6 +366,18 @@ class _PendingLimit:
     regime:      bool | None
     ttl:         int
     waited:      int = 0
+
+
+@dataclass
+class _PendingMicroBoS:
+    """Wacht op een BoS-bevestiging op lagere TF na een 15m sweep."""
+    direction:    str
+    liq_level:    float          # gesweept niveau; BoS = close boven/onder dit niveau
+    sl_price:     float          # voorberekend vanuit de sweep-candle
+    regime:       bool | None
+    sweep_ts:     pd.Timestamp   # 15m timestamp van de sweep
+    window:       int            # max lagere-TF candles te controleren
+    candles_seen: int = 0        # teller lagere-TF candles al gezien
 
 
 @dataclass

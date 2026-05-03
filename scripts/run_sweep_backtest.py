@@ -80,6 +80,13 @@ _FILTER_PRESETS: dict[str, SweepFilters] = {
     "rejection":           SweepFilters(bos_confirm=True, bos_window=20, sweep_rejection=True),
     "trend20":             SweepFilters(bos_confirm=True, bos_window=20, pre_sweep_lookback=20),
     "rejection+trend20":   SweepFilters(bos_confirm=True, bos_window=20, sweep_rejection=True, pre_sweep_lookback=20),
+    # Micro-BoS op lagere timeframe
+    "micro_bos_3m":        SweepFilters(micro_bos_tf="3min", micro_bos_window=20),
+    "micro_bos_5m":        SweepFilters(micro_bos_tf="5min", micro_bos_window=20),
+    "long_micro_bos_3m":   SweepFilters(direction="long",  micro_bos_tf="3min", micro_bos_window=20),
+    "short_micro_bos_3m":  SweepFilters(direction="short", micro_bos_tf="3min", micro_bos_window=20),
+    "long_micro_bos_5m":   SweepFilters(direction="long",  micro_bos_tf="5min", micro_bos_window=20),
+    "short_micro_bos_5m":  SweepFilters(direction="short", micro_bos_tf="5min", micro_bos_window=20),
 }
 
 

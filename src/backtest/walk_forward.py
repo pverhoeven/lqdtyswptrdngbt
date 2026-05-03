@@ -106,6 +106,18 @@ def run_walk_forward(
     df_15m_all = pd.read_parquet(path_15m)
     df_4h_all  = pd.read_parquet(path_4h)
 
+    df_lower_all = None
+    if filters.micro_bos_tf:
+        tf_friendly = filters.micro_bos_tf.replace("min", "m")
+        path_lower  = processed_dir / f"{symbol}_{tf_friendly}.parquet"
+        if not path_lower.exists():
+            raise FileNotFoundError(
+                f"{path_lower} niet gevonden. "
+                f"Voer uit: python scripts/build_cache.py --lower-tf {filters.micro_bos_tf}"
+            )
+        df_lower_all = pd.read_parquet(path_lower)
+        logger.info("Lagere-TF data geladen: %s", tf_friendly)
+
     results: list[WalkForwardWindow] = []
 
     for i, (tr_start, tr_end, te_start, te_end) in enumerate(windows, 1):
@@ -118,6 +130,7 @@ def run_walk_forward(
             cfg, df_15m_all, df_4h_all, symbol,
             tr_start, tr_end, te_start, te_end,
             filters=filters,
+            df_lower_all=df_lower_all,
         )
         results.append(WalkForwardWindow(
             train_start = tr_start,
@@ -204,6 +217,7 @@ def _run_window(
     te_start: str,
     te_end:   str,
     filters: SweepFilters | None = None,
+    df_lower_all: pd.DataFrame | None = None,
 ) -> tuple[BacktestMetrics, list[Trade]]:
     """Train HMM op train-venster, test backtest op test-venster."""
 
@@ -244,7 +258,19 @@ def _run_window(
     smc_cache   = smc_cache.loc[common_idx]
     regimes_15m = regimes_15m.reindex(common_idx)
 
-    trades, _, _ = sweep_run_loop(cfg, df_15m_test, smc_cache, regimes_15m, filters or SweepFilters())
+    df_lower_test = None
+    if df_lower_all is not None:
+        ts_te_s = pd.Timestamp(te_start, tz="UTC")
+        ts_te_e = pd.Timestamp(te_end,   tz="UTC")
+        df_lower_test = df_lower_all[
+            (df_lower_all.index >= ts_te_s) &
+            (df_lower_all.index <= ts_te_e + pd.Timedelta(minutes=15))
+        ]
+
+    trades, _, _ = sweep_run_loop(
+        cfg, df_15m_test, smc_cache, regimes_15m, filters or SweepFilters(),
+        df_lower=df_lower_test,
+    )
 
     metrics = compute_metrics(
         trades,
