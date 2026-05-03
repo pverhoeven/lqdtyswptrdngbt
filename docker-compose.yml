@@ -1,17 +1,13 @@
 services:
-  trader:
+  paper-trader:
     build: .
     env_file:
       - path: .env
         required: false   # niet nodig op Oracle Cloud (secrets via OCI Vault)
     environment:
-      - OCI_VAULT_OCID   # wordt overgenomen uit host-omgeving als gezet
+      - OCI_VAULT_OCID   # Oracle Cloud: haalt Telegram credentials op uit OCI Vault
     volumes:
-      - ./data:/app/data
       - ./logs:/app/logs
       - ./config:/app/config   # mount zodat je config.yaml kunt aanpassen zonder rebuild
     restart: unless-stopped
-    # Pas --filter en --exchange hieronder aan als nodig:
-    #   --filter: baseline | regime | long_only | short_only | bos10 | regime_long | ...
-    #   --exchange: okx (live) | paper (simulatie)
-    command: ["python", "scripts/run_live_trader.py", "--exchange", "okx", "--filter", "long_only"]
+    command: ["python", "scripts/run_paper_trader.py", "--filter", "bos20"]

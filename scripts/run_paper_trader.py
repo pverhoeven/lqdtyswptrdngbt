@@ -35,7 +35,7 @@ from src.secrets_loader import load_secrets
 load_secrets()
 
 from src.config_loader import load_config
-from src.feeds.binance_feed import BinanceFeed
+from src.feeds.okx_feed import OKXFeed
 from src.notifications.notifier import Notifier
 from src.signals.detector import SweepDetector
 from src.signals.filters import SweepFilters
@@ -97,7 +97,7 @@ def main() -> None:
     fee_pct = cfg["backtest"]["fee_pct"]
 
     # --- Componenten bouwen ---
-    feed = BinanceFeed(cfg)
+    feed = OKXFeed(cfg)
 
     detector = SweepDetector(
         filters       = filters,
