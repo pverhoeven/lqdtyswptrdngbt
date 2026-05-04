@@ -41,6 +41,7 @@ split:
 # -----------------------------------------------------------------------------
 smc:
   swing_length: 10               # Lookback voor swing highs/lows
+  causal_shift: true            # Verschuif signalen met swing_length candles (voorkomt look-ahead bias)
 
   # Cache metadata
   lib_version: "0.0.27"          # Bij versiewijziging: gehele cache herbouwen
@@ -84,6 +85,8 @@ risk:
   reward_ratio: 1.5              # Risk:reward (TP = SL * reward_ratio)
   sl_buffer_pct: 0.5             # % onder OB-bottom (long) / boven OB-top (short)
   max_open_trades: 1             # Maximum gelijktijdig open posities
+  max_margin_fraction: 1.0      # Max fractie van kapitaal als margin per trade (1.0 = geen limiet)
+  funding_rate_per_8h: 0.0001  # Funding kosten per 8u (0.01%); beide richtingen betalen (conservatief)
 
   # Entry: limit order op midden van OB-zone
   entry: "ob_midpoint"
@@ -120,8 +123,9 @@ filters:
 # Backtest engine
 # -----------------------------------------------------------------------------
 backtest:
-  fee_pct: 0.1      # 0.1% (MOET 0.1 zijn, niet 1.0!)
-  slippage_pct: 0.05 # 0.05% (MOET 0.05 zijn, niet 5.0!)
+  fee_pct: 0.1           # 0.1% (MOET 0.1 zijn, niet 1.0!)
+  slippage_pct: 0.05     # 0.05% (MOET 0.05 zijn, niet 5.0!)
+  next_open_entry: true  # true = entry op open van volgende candle (realistischer, iets minder trades)
 
   walk_forward:
     train_months: 12              # Trainingsvenster in maanden

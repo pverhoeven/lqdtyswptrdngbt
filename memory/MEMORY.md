@@ -1,6 +1,7 @@
 # Memory Index
 
 - [project_status.md](project_status.md) — Huidige status van de bot: welke features zijn gebouwd, wat staat nog open
+- [Paper trading live op Oracle instance](project_paper_trading.md) — bos20 draait op OCI, forward-testing doel Sharpe >1.5 na 6 maanden
 
 
 ⏺ Op basis van de code en de status-memo zou ik de bot in deze volgorde verbeteren:                                                                                                                                                                                                                                       

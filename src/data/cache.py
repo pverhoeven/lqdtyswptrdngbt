@@ -38,6 +38,14 @@ except ImportError:
 # Publieke interface
 # ---------------------------------------------------------------------------
 
+def _resolve_cache_dir(cfg: dict, symbol: str) -> Path:
+    """Geeft de cache-map terug op basis van causal_shift instelling."""
+    base = Path(cfg["data"]["paths"]["smc_cache"].format(symbol=symbol))
+    if cfg.get("smc", {}).get("causal_shift", True):
+        return base.parent / (base.name + "_causal")
+    return base
+
+
 def build_cache(cfg: dict | None = None, force: bool = False, symbol: str | None = None) -> None:
     """
     Bouw of update de SMC cache voor alle kwartaalpartities.
@@ -55,12 +63,13 @@ def build_cache(cfg: dict | None = None, force: bool = False, symbol: str | None
         cfg = load_config()
 
     symbol        = symbol or cfg["data"]["symbol"]
-    cache_dir     = Path(cfg["data"]["paths"]["smc_cache"].format(symbol=symbol))
+    cache_dir     = _resolve_cache_dir(cfg, symbol)
     processed_dir = Path(cfg["data"]["paths"]["processed"])
     tf            = cfg["data"]["timeframes"]["signal"].replace("min", "m")
 
-    swing_length = cfg["smc"]["swing_length"]
-    lib_version  = cfg["smc"]["lib_version"]
+    swing_length  = cfg["smc"]["swing_length"]
+    lib_version   = cfg["smc"]["lib_version"]
+    causal_shift  = cfg["smc"].get("causal_shift", True)
 
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -76,7 +85,7 @@ def build_cache(cfg: dict | None = None, force: bool = False, symbol: str | None
     logger.info("15m data geladen: %d candles", len(df_15m))
 
     # Controleer of de hele cache ongeldig is (versie of param gewijzigd)
-    if not force and _cache_is_stale(cache_dir, lib_version, swing_length):
+    if not force and _cache_is_stale(cache_dir, lib_version, swing_length, causal_shift):
         logger.warning(
             "Cache ongeldig (versie of swing_length gewijzigd) — volledige herbouw."
         )
@@ -93,7 +102,7 @@ def build_cache(cfg: dict | None = None, force: bool = False, symbol: str | None
         part_path  = cache_dir / f"{quarter_label}.parquet"
         meta_path  = cache_dir / f"{quarter_label}.meta.json"
 
-        if not force and _partition_is_complete(meta_path, lib_version, swing_length):
+        if not force and _partition_is_complete(meta_path, lib_version, swing_length, causal_shift):
             logger.debug("Partitie %s al compleet, overgeslagen.", quarter_label)
             continue
 
@@ -115,11 +124,12 @@ def build_cache(cfg: dict | None = None, force: bool = False, symbol: str | None
         # Bereken SMC signalen
         signals = compute_signals(ohlc_with_context, swing_length=swing_length)
 
-        # Corrigeer look-ahead bias: swing_highs_lows bevestigt een swing op index i
-        # pas na swing_length toekomstige candles, maar plaatst de waarde al op i.
-        # Verschuif alle swing-afgeleide kolommen zodat ze beschikbaar zijn op i+swing_length.
-        _smc_cols = [c for c in signals.columns if c != "atr"]
-        signals[_smc_cols] = signals[_smc_cols].shift(swing_length)
+        if causal_shift:
+            # Swing-niveaus worden pas na swing_length candles bevestigd.
+            # Verschuif alle afgeleide kolommen zodat signalen pas beschikbaar zijn
+            # wanneer ze ook in live trading detecteerbaar zouden zijn.
+            _smc_cols = [c for c in signals.columns if c != "atr"]
+            signals[_smc_cols] = signals[_smc_cols].shift(swing_length)
 
         # Bewaar alleen candles van dit kwartaal (context wegknippen)
         signals = signals.loc[q_start:q_end]
@@ -129,7 +139,7 @@ def build_cache(cfg: dict | None = None, force: bool = False, symbol: str | None
         signals.to_parquet(tmp_path)
         tmp_path.replace(part_path)
 
-        _write_meta(meta_path, quarter_label, lib_version, swing_length, symbol)
+        _write_meta(meta_path, quarter_label, lib_version, swing_length, symbol, causal_shift)
         logger.info("Partitie %s opgeslagen (%d candles).", quarter_label, len(signals))
 
     logger.info("Cache bouwen klaar.")
@@ -168,7 +178,7 @@ def load_cache(
         cfg = load_config()
 
     symbol    = symbol or cfg["data"]["symbol"]
-    cache_dir = Path(cfg["data"]["paths"]["smc_cache"].format(symbol=symbol))
+    cache_dir = _resolve_cache_dir(cfg, symbol)
 
     parquet_files = sorted(
         f for f in cache_dir.glob("*.parquet")
@@ -249,15 +259,18 @@ def _partition_is_complete(
     meta_path: Path,
     lib_version: str,
     swing_length: int,
+    causal_shift: bool = True,
 ) -> bool:
     """True als de partitie bestaat, compleet is, en de parameters overeenkomen."""
     if not meta_path.exists():
         return False
     meta = _read_meta(meta_path)
+    # Bestaande caches zonder causal_shift-veld zijn gebouwd mét shift (historisch gedrag).
     return (
         meta.get("status") == "complete"
         and meta.get("smc_lib_version") == lib_version
         and meta.get("swing_length") == swing_length
+        and meta.get("causal_shift", True) == causal_shift
     )
 
 
@@ -265,10 +278,11 @@ def _cache_is_stale(
     cache_dir: Path,
     lib_version: str,
     swing_length: int,
+    causal_shift: bool = True,
 ) -> bool:
     """
-    True als er minstens één meta.json bestaat met afwijkende versie of swing_length.
-    Een lege cache is niet stale.
+    True als er minstens één meta.json bestaat met afwijkende versie, swing_length
+    of causal_shift-instelling. Een lege cache is niet stale.
     """
     meta_files = list(cache_dir.glob("*.meta.json"))
     if not meta_files:
@@ -279,6 +293,7 @@ def _cache_is_stale(
         if (
             meta.get("smc_lib_version") != lib_version
             or meta.get("swing_length") != swing_length
+            or meta.get("causal_shift", True) != causal_shift
         ):
             return True
     return False
@@ -302,6 +317,7 @@ def _write_meta(
     lib_version: str,
     swing_length: int,
     symbol: str = "BTCUSDT",
+    causal_shift: bool = True,
 ) -> None:
     meta = {
         "coin":            symbol,
@@ -309,6 +325,7 @@ def _write_meta(
         "period":          quarter_label,
         "smc_lib_version": lib_version,
         "swing_length":    swing_length,
+        "causal_shift":    causal_shift,
         "status":          "complete",
     }
     tmp = meta_path.with_suffix(".tmp.json")

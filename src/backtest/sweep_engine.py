@@ -200,7 +200,13 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
     capital      = rcfg["capital_initial"]
     risk_pct     = rcfg["risk_per_trade_pct"] / 100.0
     rr           = rcfg["reward_ratio"]
-    is_dynamic   = filters.direction == "dynamic"
+    is_dynamic      = filters.direction == "dynamic"
+    leverage             = cfg.get("derivatives", {}).get("leverage", 1)
+    max_margin_frac      = rcfg.get("max_margin_fraction", 1.0)
+    trailing_cfg         = rcfg.get("trailing_stop")
+    next_open_entry      = cfg.get("backtest", {}).get("next_open_entry", False)
+    # 8u = 32 candles van 15m; beide richtingen betalen funding (conservatieve aanname)
+    funding_per_candle   = rcfg.get("funding_rate_per_8h", 0.0) / 32.0
 
     use_micro_bos = filters.micro_bos_tf is not None and df_lower is not None and len(df_lower) > 0
 
@@ -216,10 +222,11 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
         sl_buffer_pct = rcfg["sl_buffer_pct"],
     )
 
-    trades:           list[Trade]         = []
-    open_pos:         _Position | None    = None
-    pending:          _PendingLimit | None = None
+    trades:           list[Trade]           = []
+    open_pos:         _Position | None      = None
+    pending:          _PendingLimit | None  = None
     pending_micro:    _PendingMicroBoS | None = None
+    pending_market:   _PendingMarket | None = None
     signals_total    = 0
     signals_filled   = 0
 
@@ -236,6 +243,36 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
             filters.direction = (
                 "long" if (pd.isna(ma200_val) or ohlc_row["close"] > ma200_val) else "short"
             )
+
+        # Stap 0: vul pending marktvulling op open van deze candle
+        if open_pos is None and pending_market is not None:
+            open_price     = float(ohlc_row["open"])
+            pm             = pending_market
+            pending_market = None
+            sl_gapped = (
+                (pm.direction == "long"  and open_price <= pm.sl_price) or
+                (pm.direction == "short" and open_price >= pm.sl_price)
+            )
+            if not sl_gapped:
+                sl_dist = abs(open_price - pm.sl_price)
+                if sl_dist > open_price * 0.0001:
+                    tp   = (open_price + sl_dist * rr) if pm.direction == "long" \
+                           else (open_price - sl_dist * rr)
+                    size = (capital * risk_pct) / sl_dist
+                    if leverage > 1 and max_margin_frac < 1.0:
+                        size = min(size, (capital * max_margin_frac * leverage) / open_price)
+                    signals_filled += 1
+                    open_pos = _Position(
+                        direction               = pm.direction,
+                        entry_price             = open_price,
+                        sl_price                = pm.sl_price,
+                        tp_price                = tp,
+                        size                    = size,
+                        entry_ts                = ts,
+                        regime                  = pm.regime,
+                        trailing_cfg            = trailing_cfg,
+                        funding_rate_per_candle = funding_per_candle,
+                    )
 
         # Stap 1: open positie bewaken
         if open_pos is not None:
@@ -255,13 +292,15 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
             if filled:
                 signals_filled += 1
                 open_pos = _Position(
-                    direction   = pending.direction,
-                    entry_price = pending.entry_price,
-                    sl_price    = pending.sl_price,
-                    tp_price    = pending.tp_price,
-                    size        = pending.size,
-                    entry_ts    = ts,
-                    regime      = pending.regime,
+                    direction               = pending.direction,
+                    entry_price             = pending.entry_price,
+                    sl_price                = pending.sl_price,
+                    tp_price                = pending.tp_price,
+                    size                    = pending.size,
+                    entry_ts                = ts,
+                    regime                  = pending.regime,
+                    trailing_cfg            = trailing_cfg,
+                    funding_rate_per_candle = funding_per_candle,
                 )
                 pending = None
             else:
@@ -287,15 +326,19 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
                         if sl_dist > 0:
                             tp   = (lt_close + sl_dist * rr) if pending_micro.direction == "long" else (lt_close - sl_dist * rr)
                             size = (capital * risk_pct) / sl_dist
+                            if leverage > 1 and max_margin_frac < 1.0:
+                                size = min(size, (capital * max_margin_frac * leverage) / lt_close)
                             signals_filled += 1
                             open_pos = _Position(
-                                direction   = pending_micro.direction,
-                                entry_price = lt_close,
-                                sl_price    = sl,
-                                tp_price    = tp,
-                                size        = size,
-                                entry_ts    = lt_ts,
-                                regime      = pending_micro.regime,
+                                direction               = pending_micro.direction,
+                                entry_price             = lt_close,
+                                sl_price                = sl,
+                                tp_price                = tp,
+                                size                    = size,
+                                entry_ts                = lt_ts,
+                                regime                  = pending_micro.regime,
+                                trailing_cfg            = trailing_cfg,
+                                funding_rate_per_candle = funding_per_candle,
                             )
                         pending_micro = None
                         break
@@ -307,7 +350,8 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
         signal = detector.on_candle(ohlc_row, smc_row, regime)
 
         # Stap 4: nieuw signaal alleen verwerken als volledig vrij
-        if open_pos is None and pending is None and pending_micro is None and signal is not None and signal.sl_distance > 0:
+        if (open_pos is None and pending is None and pending_micro is None
+                and pending_market is None and signal is not None and signal.sl_distance > 0):
             signals_total += 1
             if use_micro_bos and signal.liq_level > 0:
                 # Wacht op micro-BoS op lagere TF in plaats van directe entry
@@ -321,6 +365,8 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
                 )
             elif pending_ttl > 0:
                 size = (capital * risk_pct) / signal.sl_distance
+                if leverage > 1 and max_margin_frac < 1.0:
+                    size = min(size, (capital * max_margin_frac * leverage) / signal.entry_price)
                 pending = _PendingLimit(
                     direction   = signal.direction,
                     entry_price = signal.entry_price,
@@ -331,18 +377,29 @@ def _run_loop(cfg, df_15m, cache, regimes, filters, ma200=None, pending_ttl: int
                     regime      = signal.regime,
                     ttl         = pending_ttl,
                 )
+            elif next_open_entry:
+                # Entry op open van volgende candle (realistischere simulatie)
+                pending_market = _PendingMarket(
+                    direction = signal.direction,
+                    sl_price  = signal.sl_price,
+                    regime    = signal.regime,
+                )
             else:
                 # Directe fill (oorspronkelijk gedrag)
                 size = (capital * risk_pct) / signal.sl_distance
+                if leverage > 1 and max_margin_frac < 1.0:
+                    size = min(size, (capital * max_margin_frac * leverage) / signal.entry_price)
                 signals_filled += 1
                 open_pos = _Position(
-                    direction   = signal.direction,
-                    entry_price = signal.entry_price,
-                    sl_price    = signal.sl_price,
-                    tp_price    = signal.tp_price,
-                    size        = size,
-                    entry_ts    = ts,
-                    regime      = signal.regime,
+                    direction               = signal.direction,
+                    entry_price             = signal.entry_price,
+                    sl_price                = signal.sl_price,
+                    tp_price                = signal.tp_price,
+                    size                    = size,
+                    entry_ts                = ts,
+                    regime                  = signal.regime,
+                    trailing_cfg            = trailing_cfg,
+                    funding_rate_per_candle = funding_per_candle,
                 )
 
     if is_dynamic:
@@ -369,6 +426,14 @@ class _PendingLimit:
 
 
 @dataclass
+class _PendingMarket:
+    """Vul op open van volgende candle na BOS-signaal (realistischere entry)."""
+    direction: str
+    sl_price:  float
+    regime:    bool | None
+
+
+@dataclass
 class _PendingMicroBoS:
     """Wacht op een BoS-bevestiging op lagere TF na een 15m sweep."""
     direction:    str
@@ -382,22 +447,68 @@ class _PendingMicroBoS:
 
 @dataclass
 class _Position:
-    direction:   str
-    entry_price: float
-    sl_price:    float
-    tp_price:    float
-    size:        float
-    entry_ts:    pd.Timestamp
-    regime:      bool | None
+    direction:              str
+    entry_price:            float
+    sl_price:               float
+    tp_price:               float
+    size:                   float
+    entry_ts:               pd.Timestamp
+    regime:                 bool | None
+    trailing_cfg:           dict | None = None
+    funding_rate_per_candle: float      = 0.0
+
+    def __post_init__(self) -> None:
+        self._sl_dist_0       = abs(self.entry_price - self.sl_price)
+        self._peak            = self.entry_price
+        self._be_done         = False
+        self._funding_accrued = 0.0
 
     def check(self, row: pd.Series) -> str | None:
         low, high = float(row["low"]), float(row["high"])
+
+        # Controleer SL/TP op huidige candle vóór trailing-update
         if self.direction == "long":
             if low  <= self.sl_price: return "loss"
             if high >= self.tp_price: return "win"
         else:
             if high >= self.sl_price: return "loss"
             if low  <= self.tp_price: return "win"
+
+        # Candle overleeft → peak bijwerken en trailing SL berekenen voor volgende candle
+        if self.direction == "long":
+            self._peak = max(self._peak, high)
+        else:
+            self._peak = min(self._peak, low)
+
+        tcfg = self.trailing_cfg
+        if tcfg and tcfg.get("enabled") and self._sl_dist_0 > 0:
+            be_r    = tcfg.get("breakeven_at_r", 1.0)
+            trail_r = tcfg.get("trail_after_r")
+            step    = tcfg.get("trail_step_r", 0.5) * self._sl_dist_0
+
+            if self.direction == "long":
+                if not self._be_done and self._peak >= self.entry_price + be_r * self._sl_dist_0:
+                    self.sl_price = max(self.sl_price, self.entry_price)
+                    self._be_done = True
+                if trail_r is not None and step > 0 and \
+                        self._peak >= self.entry_price + trail_r * self._sl_dist_0:
+                    ideal = self._peak - trail_r * self._sl_dist_0
+                    if ideal > self.sl_price:
+                        self.sl_price += int((ideal - self.sl_price) / step) * step
+            else:
+                if not self._be_done and self._peak <= self.entry_price - be_r * self._sl_dist_0:
+                    self.sl_price = min(self.sl_price, self.entry_price)
+                    self._be_done = True
+                if trail_r is not None and step > 0 and \
+                        self._peak <= self.entry_price - trail_r * self._sl_dist_0:
+                    ideal = self._peak + trail_r * self._sl_dist_0
+                    if ideal < self.sl_price:
+                        self.sl_price -= int((self.sl_price - ideal) / step) * step
+
+        # Funding kosten over deze overleefde candle
+        if self.funding_rate_per_candle > 0:
+            self._funding_accrued += self.entry_price * self.size * self.funding_rate_per_candle
+
         return None
 
 
@@ -407,14 +518,16 @@ def _close(pos, outcome, exit_ts, fee_pct, slippage_pct, capital):
                      else (pos.entry_price - exit_price)) * pos.size
     fee_deducted  = (pos.entry_price + exit_price) * pos.size * fee_pct
     slippage_cost = abs(exit_price - pos.entry_price) * pos.size * slippage_pct
-    net_pnl       = raw_pnl - fee_deducted - slippage_cost
+    funding_cost  = getattr(pos, "_funding_accrued", 0.0)
+    net_pnl       = raw_pnl - fee_deducted - slippage_cost - funding_cost
 
     return Trade(
         entry_time=pos.entry_ts, exit_time=exit_ts,
         direction=pos.direction, entry_price=pos.entry_price,
         exit_price=exit_price, sl_price=pos.sl_price, tp_price=pos.tp_price,
         outcome=outcome, pnl_pct=net_pnl/capital,
-        pnl_capital=net_pnl, regime=pos.regime, fee_cost=fee_deducted + slippage_cost
+        pnl_capital=net_pnl, regime=pos.regime,
+        fee_cost=fee_deducted + slippage_cost + funding_cost,
     )
 
 
