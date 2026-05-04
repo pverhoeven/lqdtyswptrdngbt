@@ -4,7 +4,7 @@ scripts/inspect_smc_output.py — Inspecteert de ruwe output van de SMC library.
 Wat dit script doet:
 - Laadt 1 maand 15m data uit de bestaande cache
 - Toont per SMC-kolom: aantal non-NaN waarden, unieke waarden, voorbeeldrijen
-- Helpt begrijpen of de lifecycle-verwachtingen kloppen met de werkelijke output
+- Helpt begrijpen of de SMC-output overeenkomt met de verwachting
 
 Gebruik:
     python scripts/inspect_smc_output.py
@@ -212,7 +212,7 @@ def main() -> None:
     if "ob" in cache.columns:
         ob_count = ((cache["ob"] != 0) & cache["ob"].notna()).sum()
         if ob_count == 0:
-            issues.append("❌ ob: GEEN actieve signalen — lifecycle kan nooit starten")
+            issues.append("❌ ob: GEEN actieve signalen")
         elif ob_count < 5:
             issues.append(f"⚠️  ob: slechts {ob_count} signalen — te zeldzaam")
         else:
@@ -237,10 +237,9 @@ def main() -> None:
         for issue in issues:
             print(f"  {issue}")
         print()
-        print("  Aanbeveling: run scripts/debug_lifecycle.py voor verdere diagnose")
+        print("  Aanbeveling: run scripts/run_sweep_backtest.py voor verdere diagnose")
     else:
         print("\n  Alle kritische signalen aanwezig.")
-        print("  Aanbeveling: run scripts/debug_lifecycle.py om de keten te testen")
 
     print(f"\n{'='*60}\n")
 

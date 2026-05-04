@@ -145,9 +145,12 @@ class SweepDetector:
 
         # --- Stap 1: controleer pending BOS-sweep ---
         if self._pending is not None:
-            signal = self._pending.check_bos(bos, self._candle_count, ohlc_row)
-            if signal is not None or self._pending.is_expired(self._candle_count):
+            if self._pending.is_expired(self._candle_count):
                 self._pending = None
+            else:
+                signal = self._pending.check_bos(bos, self._candle_count, ohlc_row)
+                if signal is not None:
+                    self._pending = None
 
         # --- Stap 2: detecteer nieuwe sweep op deze candle ---
         if liq != 0 and not _is_nan(liq):

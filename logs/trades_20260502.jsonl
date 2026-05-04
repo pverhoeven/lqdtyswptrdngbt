@@ -1,0 +1,2 @@
+{"event": "signal", "timestamp": "2026-05-02T19:00:10.229092+00:00", "signal_ts": "2026-05-02T18:45:00+00:00", "direction": "long", "entry_price": 78428.4, "sl_price": 78036.25799999999, "tp_price": 79016.61300000001, "liq_level": 78376.87, "regime": null, "filter": "ema5/13"}
+{"event": "signal", "timestamp": "2026-05-03T02:37:09.570207+00:00", "signal_ts": "2026-05-03T01:00:00+00:00", "direction": "short", "entry_price": 78328.0, "sl_price": 78719.63999999998, "tp_price": 77740.54000000002, "liq_level": 78559.24, "regime": null, "filter": "ema5/13"}

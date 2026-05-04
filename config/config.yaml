@@ -47,23 +47,6 @@ smc:
   lib_version: "0.0.27"          # Bij versiewijziging: gehele cache herbouwen
 
 # -----------------------------------------------------------------------------
-# Lifecycle state machine
-# Alle TTL-waarden in aantal 15m candles
-# -----------------------------------------------------------------------------
-lifecycle:
-  ttl:
-    ob_formed: 200       # ~5 dagen
-    sweep_occurred: 20  # ~5 dagen
-    choch_confirmed: 15 # ~5 dagen
-    entry_valid: 5     # ~5 dagen
-
-  # Invalidatiecondities (true = actief)
-  invalidation:
-    ob_mitigated:        true
-    opposite_bos:       false
-    regime_change:      true
-
-# -----------------------------------------------------------------------------
 # Regime detector (4h HMM)
 # -----------------------------------------------------------------------------
 regime:

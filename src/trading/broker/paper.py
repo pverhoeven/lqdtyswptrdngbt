@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 class _TrailingState:
     sl_distance:  float
     current_sl:   float
+    original_sl:  float
     best_price:   float | None = None
     be_activated: bool         = False
 
@@ -153,6 +154,7 @@ class PaperBroker(AbstractBroker):
                     self._trailing[order.order_id] = _TrailingState(
                         sl_distance = sl_dist,
                         current_sl  = order.sl_price,
+                        original_sl = order.sl_price,
                     )
                 logger.info(
                     "Order gevuld  [%s] %s @ %.2f",
@@ -192,6 +194,17 @@ class PaperBroker(AbstractBroker):
                 self._capital    += net_pnl
                 self._closed.append(order)
                 closed_this_candle.append(order)
+
+                # Trailing SL exit detectie — vóór pop zodat state nog beschikbaar is
+                if outcome == "loss":
+                    ts = self._trailing.get(order.order_id)
+                    if ts and order.sl_price != ts.original_sl:
+                        slippage = exit_price - order.sl_price  # paper: altijd 0.00
+                        logger.info(
+                            "TRAILING_SL_EXIT [%s] planned_sl=%.2f  fill=%.2f  slippage=%.4f",
+                            order.order_id, order.sl_price, exit_price, slippage,
+                        )
+
                 self._trailing.pop(order.order_id, None)
                 self._partial_taken.pop(order.order_id, None)
 

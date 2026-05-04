@@ -109,18 +109,13 @@ def compute_metrics(
             avg_trade_pnl=0.0,
         )
 
-    # Bereken equity curve per candle
+    pnl_series  = pd.Series([t.pnl_capital for t in trades])
+    equity      = initial_capital + pnl_series.cumsum()
 
-    # --- Equity curve ---
-    equity_curve = _build_equity_curve(trades, initial_capital, freq="15min")
-
-    # --- Metrics ---
-    pnl_series = pd.Series([t.pnl_capital for t in trades])
-
-    # Sharpe ratio (op basis van equity curve)
-    sharpe = _sharpe_ratio_from_equity(equity_curve, risk_free_rate)
-
-    equity = initial_capital + pnl_series.cumsum()
+    # Sharpe op trade-exit tijdstempels voorkomt dilutie door stille 15m-periodes
+    exit_times   = pd.DatetimeIndex([t.exit_time for t in trades])
+    trade_equity = pd.Series(equity.values, index=exit_times)
+    sharpe       = _sharpe_ratio_from_equity(trade_equity, risk_free_rate)
 
     wins   = pnl_series[pnl_series > 0]
     losses = pnl_series[pnl_series <= 0]
