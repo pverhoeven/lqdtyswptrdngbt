@@ -180,6 +180,13 @@ coins:
     tier: "mid_cap"
     leverage: 3
 
+# -----------------------------------------------------------------------------
+# Sweep scanner (Telegram signalen, geen trading)
+# Draait onafhankelijk van de trading bot via: python scripts/run_sweep_scanner.py
+# -----------------------------------------------------------------------------
+scanner:
+  sweep_rejection: true   # Alleen sweeps waarbij de candle terugslaat (hogere kwaliteit)
+
 risk_tiers:
   large_cap:
     risk_per_trade_pct: 1.0

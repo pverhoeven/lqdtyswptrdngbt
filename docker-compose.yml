@@ -11,3 +11,17 @@ services:
       - ./config:/app/config   # mount zodat je config.yaml kunt aanpassen zonder rebuild
     restart: unless-stopped
     command: ["python", "scripts/run_paper_trader.py", "--filter", "bos20"]
+
+  daily-report:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - OCI_VAULT_OCID
+    volumes:
+      - ./config:/app/config
+    restart: unless-stopped
+    # Stuurt rapport bij opstart + daarna elke dag om 07:00 UTC
+    # Pas --hour aan voor een ander tijdstip (UTC)
+    command: ["python", "scripts/run_daily_report.py", "--daemon", "--hour", "7"]
