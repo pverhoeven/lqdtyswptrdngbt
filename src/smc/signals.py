@@ -61,6 +61,13 @@ _BOSCHOCH_MAP = {
     "BrokenIndex": "structure_broken_idx",
 }
 
+_FVG_MAP = {
+    "FVG":           "fvg",
+    "Top":           "fvg_top",
+    "Bottom":        "fvg_bottom",
+    "MitigatedIndex":"fvg_mitigated_idx",
+}
+
 
 # ---------------------------------------------------------------------------
 # Publieke interface
@@ -107,6 +114,10 @@ def compute_signals(ohlc: pd.DataFrame, swing_length: int = 50) -> pd.DataFrame:
     # --- BOS / CHoCH ---
     boschoch_raw = smc.bos_choch(ohlc, swing_hl, close_break=True)
     result = _merge_mapped(result, boschoch_raw, _BOSCHOCH_MAP)
+
+    # --- Fair Value Gaps ---
+    fvg_raw = smc.fvg(ohlc, join_consecutive=False)
+    result = _merge_mapped(result, fvg_raw, _FVG_MAP)
 
     # --- ATR (Wilder's smoothing, smc library has no atr method) ---
     high = ohlc["high"]
@@ -165,6 +176,8 @@ _EXPECTED_OUTPUT_COLUMNS = (
     "liq", "liq_level", "liq_end_idx", "liq_swept_idx",
     # BOS / CHoCH
     "bos", "choch", "structure_level", "structure_broken_idx",
+    # Fair Value Gaps
+    "fvg", "fvg_top", "fvg_bottom", "fvg_mitigated_idx",
     # ATR
     "atr",
 )

@@ -39,6 +39,13 @@ _BOS_WINDOW     = 20     # candles na sweep voor BoS-check
 _PROXIMITY      = 0.06   # max 6% afstand tot EQL/EQH zone
 _SL_BUF         = 0.005  # 0.5% voorbij sweep wick
 _RR             = 2.0
+_RR_FVG         = 4.0
+_RR_OB          = 4.0
+_RR_BOS_SA      = 2.8    # standalone BoS (geen EQL/EQH vereist)
+_FIB_618_LO     = 0.57
+_FIB_618_HI     = 0.65
+_FIB_786_LO     = 0.74
+_FIB_786_HI     = 0.82
 
 
 @dataclass
@@ -49,19 +56,20 @@ class DailySetup:
     fase:            str    # "FASE 1" | "FASE 2" | "FASE 3"
     fase_label:      str    # leesbare omschrijving
     current_price:   float
-    zone_level:      float  # EQL (long) of EQH (short) zone
-    sweep_low:       float  # diepste wick (long) of hoogste wick (short)
-    bos_level:       float  # gebroken swing high/low na de sweep (0 als geen BoS)
+    zone_level:      float  # primair niveau (EQL/EQH zone, FVG top/bottom, OB grens, BoS niveau, FIB niveau)
+    sweep_low:       float  # diepste wick (EQL/EQH), of lagere grens van de zone
+    bos_level:       float  # BoS niveau (0 als n.v.t.)
     entry_zone:      float  # geschatte entry (BoS-niveau of zone zelf)
     sl:              float
     tp:              float
     stars:           int    # 1–3
-    n_equal:         int    # hoeveel gelijke highs/lows
+    n_equal:         int    # hoeveel gelijke highs/lows (0 voor niet-EQL/EQH setups)
     confluences:     list[str] = field(default_factory=list)
     distance_pct:    float = 0.0
+    setup_type:      str = "EQL/EQH"   # "EQL/EQH" | "FVG" | "OB" | "BOS" | "FIB"
 
 
-def run_daily_scan(cfg: dict) -> list[DailySetup]:
+def run_daily_scan(cfg: dict, timeframe: str = "1h") -> list[DailySetup]:
     """Scan alle geconfigureerde coins en geef gerangschikte setups terug."""
     coins = cfg.get("coins", [])
 
@@ -72,7 +80,7 @@ def run_daily_scan(cfg: dict) -> list[DailySetup]:
         if not symbol or not xperp:
             continue
         try:
-            setups = _scan_symbol(symbol, xperp)
+            setups = _scan_symbol(symbol, xperp, timeframe)
             all_setups.extend(setups)
             logger.info("%s: %d setup(s)", symbol, len(setups))
         except Exception as exc:
@@ -88,13 +96,13 @@ def run_daily_scan(cfg: dict) -> list[DailySetup]:
 # Per-symbool scan
 # ---------------------------------------------------------------------------
 
-def _scan_symbol(symbol: str, xperp: str) -> list[DailySetup]:
+def _scan_symbol(symbol: str, xperp: str, timeframe: str = "1h") -> list[DailySetup]:
     try:
         from smartmoneyconcepts import smc as smc_lib
     except ImportError as exc:
         raise ImportError("smartmoneyconcepts niet geïnstalleerd") from exc
 
-    df      = _fetch_ohlcv(symbol, "1h", limit=_FETCH_LIMIT)
+    df      = _fetch_ohlcv(symbol, timeframe, limit=_FETCH_LIMIT)
     if len(df) < _SWING_LENGTH * 4:
         return []
 
@@ -128,10 +136,16 @@ def _scan_symbol(symbol: str, xperp: str) -> list[DailySetup]:
         if s:
             setups.append(s)
 
-    # Max 4 per symbool: prioriteer hogere fasen
+    # --- FVG, OB, standalone BoS, FIB ---
+    setups.extend(_scan_fvg(symbol, xperp, signals, current_price))
+    setups.extend(_scan_ob(symbol, xperp, signals, current_price))
+    setups.extend(_scan_bos_standalone(symbol, xperp, df, signals, swing, current_price))
+    setups.extend(_scan_fib(symbol, xperp, df, swing, current_price))
+
+    # Max 8 per symbool: prioriteer hogere fasen en meer sterren
     fase_order = {"FASE 3": 0, "FASE 2": 1, "FASE 1": 2}
     setups.sort(key=lambda s: (fase_order.get(s.fase, 9), -s.stars, s.distance_pct))
-    return setups[:4]
+    return setups[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +364,390 @@ def _evaluate_short(
         sl=sl, tp=tp, stars=stars, n_equal=n_eq,
         confluences=confluences, distance_pct=dist,
     )
+
+
+# ---------------------------------------------------------------------------
+# FVG setup detectie
+# ---------------------------------------------------------------------------
+
+def _scan_fvg(
+    symbol: str, xperp: str, signals: pd.DataFrame, current_price: float,
+) -> list[DailySetup]:
+    """Detecteer ongemittigeerde Fair Value Gaps binnen proximity van huidige prijs."""
+    # MitigatedIndex == 0 = nog niet gemittigeerd (library-conventie: 0 = null)
+    fvg_rows = signals[
+        signals["fvg"].isin([1.0, -1.0]) &
+        (signals["fvg_mitigated_idx"] == 0.0) &
+        signals["fvg_top"].notna() &
+        signals["fvg_bottom"].notna()
+    ].iloc[-_SWEEP_LOOKBACK:]  # alleen recente FVGs
+
+    setups: list[DailySetup] = []
+
+    for _, row in fvg_rows.iterrows():
+        fvg_dir = int(row["fvg"])
+        top     = float(row["fvg_top"])
+        bottom  = float(row["fvg_bottom"])
+        if top <= bottom:
+            continue
+
+        if fvg_dir == 1:  # Bullish FVG → LONG (prijs boven of in de gap)
+            if current_price < bottom:
+                continue  # gap al gebroken naar beneden
+            entry = top
+            dist  = max(0.0, (current_price - top) / current_price)
+            if dist > _PROXIMITY:
+                continue
+            sl      = bottom * (1 - _SL_BUF)
+            sl_dist = abs(entry - sl)
+            if sl_dist < entry * 0.001:
+                continue
+            tp = entry + sl_dist * _RR_FVG
+            setups.append(DailySetup(
+                symbol=symbol, xperp=xperp, direction="long",
+                fase="FASE 3", fase_label="Bullish FVG — entry bij re-test",
+                current_price=current_price, zone_level=top,
+                sweep_low=bottom, bos_level=0.0, entry_zone=entry,
+                sl=sl, tp=tp, stars=2, n_equal=0,
+                confluences=[
+                    f"Bullish FVG top @ {_fmt(top)}  /  bottom @ {_fmt(bottom)}",
+                    f"Afstand: {dist:.1%}  |  TP 4R @ {_fmt(tp)}",
+                ],
+                distance_pct=dist, setup_type="FVG",
+            ))
+
+        elif fvg_dir == -1:  # Bearish FVG → SHORT (prijs onder of in de gap)
+            if current_price > top:
+                continue  # gap al gebroken naar boven
+            entry = bottom
+            dist  = max(0.0, (bottom - current_price) / current_price)
+            if dist > _PROXIMITY:
+                continue
+            sl      = top * (1 + _SL_BUF)
+            sl_dist = abs(sl - entry)
+            if sl_dist < entry * 0.001:
+                continue
+            tp = entry - sl_dist * _RR_FVG
+            if tp <= 0:
+                continue
+            setups.append(DailySetup(
+                symbol=symbol, xperp=xperp, direction="short",
+                fase="FASE 3", fase_label="Bearish FVG — entry bij re-test",
+                current_price=current_price, zone_level=bottom,
+                sweep_low=top, bos_level=0.0, entry_zone=entry,
+                sl=sl, tp=tp, stars=2, n_equal=0,
+                confluences=[
+                    f"Bearish FVG bottom @ {_fmt(bottom)}  /  top @ {_fmt(top)}",
+                    f"Afstand: {dist:.1%}  |  TP 4R @ {_fmt(tp)}",
+                ],
+                distance_pct=dist, setup_type="FVG",
+            ))
+
+    return setups
+
+
+# ---------------------------------------------------------------------------
+# OB setup detectie  (met BoS/CHoCH bevestiging)
+# ---------------------------------------------------------------------------
+
+def _scan_ob(
+    symbol: str, xperp: str, signals: pd.DataFrame, current_price: float,
+) -> list[DailySetup]:
+    """Detecteer ongemittigeerde Order Blocks met recente structuur-bevestiging."""
+    recent = signals.iloc[-_SWEEP_LOOKBACK:]
+    has_bull = ((recent["bos"] == 1.0) | (recent["choch"] == 1.0)).any()
+    has_bear = ((recent["bos"] == -1.0) | (recent["choch"] == -1.0)).any()
+
+    # MitigatedIndex == 0 = nog niet gemittigeerd (library-conventie: 0 = null)
+    ob_rows = signals[
+        signals["ob"].isin([1.0, -1.0]) &
+        (signals["ob_mitigated_idx"] == 0.0) &
+        signals["ob_top"].notna() &
+        signals["ob_bottom"].notna()
+    ].iloc[-_SWEEP_LOOKBACK:]
+
+    # CHoCH = sterkere bevestiging (3 ⭐), BoS = continuation (2 ⭐)
+    has_bull_choch = (recent["choch"] == 1.0).any()
+    has_bear_choch = (recent["choch"] == -1.0).any()
+
+    setups: list[DailySetup] = []
+
+    for _, row in ob_rows.iterrows():
+        ob_dir = int(row["ob"])
+        top    = float(row["ob_top"])
+        bottom = float(row["ob_bottom"])
+        if top <= bottom:
+            continue
+
+        if ob_dir == 1:  # Bullish OB → LONG
+            if not has_bull:
+                continue
+            if current_price < bottom:
+                continue  # OB al doorgebroken naar beneden
+            entry = top
+            dist  = max(0.0, (current_price - top) / current_price)
+            if dist > _PROXIMITY:
+                continue
+            sl      = bottom * (1 - _SL_BUF)
+            sl_dist = abs(entry - sl)
+            if sl_dist < entry * 0.001:
+                continue
+            tp    = entry + sl_dist * _RR_OB
+            stars = 3 if has_bull_choch else 2
+            setups.append(DailySetup(
+                symbol=symbol, xperp=xperp, direction="long",
+                fase="FASE 3", fase_label="Bullish OB — entry bij re-test",
+                current_price=current_price, zone_level=top,
+                sweep_low=bottom, bos_level=0.0, entry_zone=entry,
+                sl=sl, tp=tp, stars=stars, n_equal=0,
+                confluences=[
+                    f"Bullish OB zone: {_fmt(bottom)} – {_fmt(top)}",
+                    ("CHoCH bevestiging ✓" if has_bull_choch else "BoS bevestiging ✓"),
+                    f"Afstand: {dist:.1%}  |  TP 4R @ {_fmt(tp)}",
+                ],
+                distance_pct=dist, setup_type="OB",
+            ))
+
+        elif ob_dir == -1:  # Bearish OB → SHORT
+            if not has_bear:
+                continue
+            if current_price > top:
+                continue  # OB al doorgebroken naar boven
+            entry = bottom
+            dist  = max(0.0, (bottom - current_price) / current_price)
+            if dist > _PROXIMITY:
+                continue
+            sl      = top * (1 + _SL_BUF)
+            sl_dist = abs(sl - entry)
+            if sl_dist < entry * 0.001:
+                continue
+            tp    = entry - sl_dist * _RR_OB
+            if tp <= 0:
+                continue
+            stars = 3 if has_bear_choch else 2
+            setups.append(DailySetup(
+                symbol=symbol, xperp=xperp, direction="short",
+                fase="FASE 3", fase_label="Bearish OB — entry bij re-test",
+                current_price=current_price, zone_level=bottom,
+                sweep_low=top, bos_level=0.0, entry_zone=entry,
+                sl=sl, tp=tp, stars=stars, n_equal=0,
+                confluences=[
+                    f"Bearish OB zone: {_fmt(bottom)} – {_fmt(top)}",
+                    ("CHoCH bevestiging ✓" if has_bear_choch else "BoS bevestiging ✓"),
+                    f"Afstand: {dist:.1%}  |  TP 4R @ {_fmt(tp)}",
+                ],
+                distance_pct=dist, setup_type="OB",
+            ))
+
+    return setups
+
+
+# ---------------------------------------------------------------------------
+# Standalone BoS setup detectie  (zonder EQL/EQH vereiste)
+# ---------------------------------------------------------------------------
+
+def _scan_bos_standalone(
+    symbol: str, xperp: str, df: pd.DataFrame, signals: pd.DataFrame,
+    swing: pd.DataFrame, current_price: float,
+) -> list[DailySetup]:
+    """Detecteer recente BoS-events als standalone entry-setup (2.8R)."""
+    recent_sig = signals.iloc[-_SWEEP_LOOKBACK:]
+    setups: list[DailySetup] = []
+
+    for bos_val, direction, swing_hl_val in [
+        (1.0, "long", -1.0),
+        (-1.0, "short", 1.0),
+    ]:
+        bos_events = recent_sig[recent_sig["bos"] == bos_val]
+        for bos_idx, bos_row in bos_events.iterrows():
+            bos_level = float(bos_row["structure_level"])
+            if bos_level <= 0 or pd.isna(bos_level):
+                continue
+
+            # Check dat re-test nog niet uitgespeeld is
+            bos_pos    = df.index.get_loc(bos_idx)
+            post_df    = df.iloc[bos_pos + 1:]
+            if direction == "long":
+                if len(post_df) > 0 and (post_df["low"] < bos_level * 0.99).any():
+                    continue
+            else:
+                if len(post_df) > 0 and (post_df["high"] > bos_level * 1.01).any():
+                    continue
+
+            dist = abs(current_price - bos_level) / current_price
+            if dist > _PROXIMITY:
+                continue
+
+            # SL op basis van laatste swing extreme vóór de BoS
+            swing_extremes = swing[swing["HighLow"] == swing_hl_val]
+            before = swing_extremes[swing_extremes.index <= bos_idx]
+            if before.empty:
+                continue
+            sl_basis = float(before["Level"].iloc[-1])
+
+            if direction == "long":
+                sl      = sl_basis * (1 - _SL_BUF)
+                sl_dist = abs(bos_level - sl)
+                if sl_dist < bos_level * 0.001:
+                    continue
+                tp         = bos_level + sl_dist * _RR_BOS_SA
+                in_retest  = current_price <= bos_level * 1.015
+                fase_label = "BoS bevestigd — ENTRY NU" if in_retest else "BoS bevestigd — entry op komst"
+            else:
+                sl      = sl_basis * (1 + _SL_BUF)
+                sl_dist = abs(sl - bos_level)
+                if sl_dist < bos_level * 0.001:
+                    continue
+                tp         = bos_level - sl_dist * _RR_BOS_SA
+                if tp <= 0:
+                    continue
+                in_retest  = current_price >= bos_level * 0.985
+                fase_label = "BoS bevestigd — ENTRY NU" if in_retest else "BoS bevestigd — entry op komst"
+
+            arrow = "Bullish" if direction == "long" else "Bearish"
+            setups.append(DailySetup(
+                symbol=symbol, xperp=xperp, direction=direction,
+                fase="FASE 3", fase_label=fase_label,
+                current_price=current_price, zone_level=bos_level,
+                sweep_low=sl_basis, bos_level=bos_level, entry_zone=bos_level,
+                sl=sl, tp=tp, stars=2, n_equal=0,
+                confluences=[
+                    f"{arrow} BoS @ {_fmt(bos_level)}",
+                    f"SL basis: swing extreme @ {_fmt(sl_basis)}",
+                ],
+                distance_pct=dist, setup_type="BOS",
+            ))
+
+    return setups
+
+
+# ---------------------------------------------------------------------------
+# FIB Retracement setup detectie
+# ---------------------------------------------------------------------------
+
+def _scan_fib(
+    symbol: str, xperp: str, df: pd.DataFrame, swing: pd.DataFrame,
+    current_price: float,
+) -> list[DailySetup]:
+    """Detecteer entry bij 0.618 of 0.786 Fibonacci retracement niveau."""
+    try:
+        from smartmoneyconcepts import smc as smc_lib
+    except ImportError:
+        return []
+
+    try:
+        retr = smc_lib.retracements(df, swing)
+    except Exception:
+        return []
+
+    if retr is None or retr.empty:
+        return []
+
+    last      = retr.iloc[-1]
+    direction = last.get("Direction",           np.nan)
+    cur_pct   = last.get("CurrentRetracement%", np.nan)
+
+    if pd.isna(direction) or pd.isna(cur_pct):
+        return []
+
+    direction = int(direction)
+    cur_pct   = float(cur_pct)
+
+    at_618 = _FIB_618_LO <= cur_pct <= _FIB_618_HI
+    at_786 = _FIB_786_LO <= cur_pct <= _FIB_786_HI
+    if not (at_618 or at_786):
+        return []
+
+    swing_highs = swing[swing["HighLow"] == 1.0]
+    swing_lows  = swing[swing["HighLow"] == -1.0]
+    if swing_highs.empty or swing_lows.empty:
+        return []
+
+    setups: list[DailySetup] = []
+
+    if direction == 1:  # Bullish trend, prijs trekt terug naar beneden → LONG
+        last_high_idx = swing_highs.index[-1]
+        lows_before   = swing_lows[swing_lows.index < last_high_idx]
+        if lows_before.empty:
+            return []
+        last_high = float(swing_highs["Level"].iloc[-1])
+        last_low  = float(lows_before["Level"].iloc[-1])
+        fib_range = last_high - last_low
+        if fib_range <= 0:
+            return []
+
+        fib_618 = last_high - 0.618 * fib_range
+        fib_786 = last_high - 0.786 * fib_range
+
+        fib_level = fib_618 if at_618 else fib_786
+        sl_level  = fib_786 if at_618 else last_low
+        sl        = sl_level * (1 - _SL_BUF)
+        sl_dist   = abs(fib_level - sl)
+        if sl_dist < fib_level * 0.001:
+            return []
+        tp      = last_high
+        if tp <= fib_level:
+            return []
+        rr      = (tp - fib_level) / sl_dist
+        label   = "0.618" if at_618 else "0.786"
+        stars   = 3 if at_786 else 2
+        dist    = abs(current_price - fib_level) / current_price
+
+        setups.append(DailySetup(
+            symbol=symbol, xperp=xperp, direction="long",
+            fase="FASE 3", fase_label=f"FIB {label} re-test — ENTRY NU",
+            current_price=current_price, zone_level=fib_level,
+            sweep_low=last_low, bos_level=last_high, entry_zone=fib_level,
+            sl=sl, tp=tp, stars=stars, n_equal=0,
+            confluences=[
+                f"FIB {label} @ {_fmt(fib_level)}  (range: {_fmt(last_low)} – {_fmt(last_high)})",
+                f"TP: swing high @ {_fmt(last_high)}  (~{rr:.1f}R)",
+            ],
+            distance_pct=dist, setup_type="FIB",
+        ))
+
+    elif direction == -1:  # Bearish trend, prijs trekt terug omhoog → SHORT
+        last_low_idx  = swing_lows.index[-1]
+        highs_before  = swing_highs[swing_highs.index < last_low_idx]
+        if highs_before.empty:
+            return []
+        last_low  = float(swing_lows["Level"].iloc[-1])
+        last_high = float(highs_before["Level"].iloc[-1])
+        fib_range = last_high - last_low
+        if fib_range <= 0:
+            return []
+
+        fib_618 = last_low + 0.618 * fib_range
+        fib_786 = last_low + 0.786 * fib_range
+
+        fib_level = fib_618 if at_618 else fib_786
+        sl_level  = fib_786 if at_618 else last_high
+        sl        = sl_level * (1 + _SL_BUF)
+        sl_dist   = abs(sl - fib_level)
+        if sl_dist < fib_level * 0.001:
+            return []
+        tp    = last_low
+        if tp >= fib_level:
+            return []
+        rr    = (fib_level - tp) / sl_dist
+        label = "0.618" if at_618 else "0.786"
+        stars = 3 if at_786 else 2
+        dist  = abs(current_price - fib_level) / current_price
+
+        setups.append(DailySetup(
+            symbol=symbol, xperp=xperp, direction="short",
+            fase="FASE 3", fase_label=f"FIB {label} re-test — ENTRY NU",
+            current_price=current_price, zone_level=fib_level,
+            sweep_low=last_high, bos_level=last_low, entry_zone=fib_level,
+            sl=sl, tp=tp, stars=stars, n_equal=0,
+            confluences=[
+                f"FIB {label} @ {_fmt(fib_level)}  (range: {_fmt(last_low)} – {_fmt(last_high)})",
+                f"TP: swing low @ {_fmt(last_low)}  (~{rr:.1f}R)",
+            ],
+            distance_pct=dist, setup_type="FIB",
+        ))
+
+    return setups
 
 
 # ---------------------------------------------------------------------------

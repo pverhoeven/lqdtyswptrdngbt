@@ -21,7 +21,8 @@ from src.trading.broker.base import Order, OrderSide
 
 logger = logging.getLogger(__name__)
 
-_TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
+_TELEGRAM_API       = "https://api.telegram.org/bot{token}/sendMessage"
+_TELEGRAM_PHOTO_API = "https://api.telegram.org/bot{token}/sendPhoto"
 
 
 def _fmt_price(v: float) -> str:
@@ -50,9 +51,10 @@ class Notifier:
         bot_token: str  = "",
         chat_id:   str  = "",
     ) -> None:
-        self._enabled  = enabled and bool(bot_token) and bool(chat_id)
-        self._url      = _TELEGRAM_API.format(token=bot_token)
-        self._chat_id  = chat_id
+        self._enabled   = enabled and bool(bot_token) and bool(chat_id)
+        self._url       = _TELEGRAM_API.format(token=bot_token)
+        self._photo_url = _TELEGRAM_PHOTO_API.format(token=bot_token)
+        self._chat_id   = chat_id
 
     @classmethod
     def from_cfg(cls, cfg: dict) -> "Notifier":
@@ -62,6 +64,20 @@ class Notifier:
             bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", tcfg.get("bot_token", "")),
             chat_id   = os.environ.get("TELEGRAM_CHAT_ID",   tcfg.get("chat_id",   "")),
         )
+
+    def send_photo(self, image_bytes: bytes, caption: str) -> None:
+        """Stuur een PNG-afbeelding met bijschrift. Falen wordt gelogd, nooit gegooien."""
+        if not self._enabled:
+            return
+        try:
+            requests.post(
+                self._photo_url,
+                data={"chat_id": self._chat_id, "caption": caption},
+                files={"photo": ("chart.png", image_bytes, "image/png")},
+                timeout=15,
+            )
+        except Exception as exc:
+            logger.warning("Telegram foto notificatie mislukt: %s", exc)
 
     # ------------------------------------------------------------------
     # Algemeen
@@ -188,19 +204,26 @@ class Notifier:
                 sign   = "-" if s.direction == "long" else "+"
                 dist   = f"{sign}{s.distance_pct:.1%}"
                 rr_val = abs(s.tp - s.entry_zone) / max(abs(s.entry_zone - s.sl), 1e-8)
+                setup_type = getattr(s, "setup_type", "EQL/EQH")
+                tag    = s.fase if setup_type == "EQL/EQH" else setup_type
 
-                lines.append(f"{arrow}  {stars}  |  {s.fase}  |  {s.fase_label}")
+                lines.append(f"{arrow}  {stars}  |  {tag}  |  {s.fase_label}")
 
-                # Zone en sweep info
-                zone_lbl = "EQL" if s.direction == "long" else "EQH"
-                lines.append(
-                    f"Zone: {_fmt_price(s.zone_level)} ({s.n_equal}× equal  |  {dist})"
-                )
-                if s.fase in ("FASE 2", "FASE 3"):
-                    sweep_lbl = "Sweep low" if s.direction == "long" else "Sweep high"
-                    lines.append(f"{sweep_lbl}: {_fmt_price(s.sweep_low)}")
-                if s.fase == "FASE 3" and s.bos_level > 0:
-                    lines.append(f"BoS niveau: {_fmt_price(s.bos_level)}")
+                if setup_type == "EQL/EQH":
+                    # EQL/EQH-specifiek: zone, sweep, BoS
+                    zone_lbl = "EQL" if s.direction == "long" else "EQH"
+                    lines.append(
+                        f"Zone: {_fmt_price(s.zone_level)} ({s.n_equal}× equal  |  {dist})"
+                    )
+                    if s.fase in ("FASE 2", "FASE 3"):
+                        sweep_lbl = "Sweep low" if s.direction == "long" else "Sweep high"
+                        lines.append(f"{sweep_lbl}: {_fmt_price(s.sweep_low)}")
+                    if s.fase == "FASE 3" and s.bos_level > 0:
+                        lines.append(f"BoS niveau: {_fmt_price(s.bos_level)}")
+                else:
+                    # FVG / OB / BOS / FIB: toon confluences
+                    for conf in s.confluences:
+                        lines.append(f"  {conf}")
 
                 # Entry / SL / TP
                 lines.append(
@@ -213,7 +236,7 @@ class Notifier:
 
         lines.append(sep)
         lines.append("Analyse: Binance 1H  |  Executie: OKX XPERP")
-        lines.append("Entry altijd na BoS-bevestiging, nooit op de sweep zelf.")
+        lines.append("Setups: EQL/EQH · FVG · OB · BoS · FIB  |  Entry na bevestiging")
 
         self.send("\n".join(lines))
 
